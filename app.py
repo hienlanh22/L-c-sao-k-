@@ -3,7 +3,7 @@
 CONG CU TRICH XUAT SAO KE NGAN HANG
 - PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (fix nhan dien cot tien theo mep phai x1)
 - HTML: VPBank (T24 Core)
-- Excel / CSV: Sacombank, Agribank IPCAS, Excel khac
+- Excel / CSV: Sacombank (fix 17-07-2025), Agribank IPCAS, Excel khac
 - Dinh dang ngay: dd/mm/yyyy
 - File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai
 """
@@ -347,7 +347,7 @@ def extract_lpbank(pdf):
 
 
 # =========================================================================
-#  3D. ACB PDF (DA FIX: Phan loai 3 cot tien bang mep phai x1 tu tieu de)
+#  3D. ACB PDF (Phan loai 3 cot tien bang mep phai x1 tu tieu de)
 # =========================================================================
 _ACB_MONEY_RE = re.compile(r'^\d{1,3}([.,]\d{3})+$|^\d{1,3}$')
 _ACB_DATE_RE = re.compile(r'^\d{2}/\d{2}/\d{4}$')
@@ -382,7 +382,6 @@ def extract_acb(pdf):
     for w in p0_words:
         w['text'] = unicodedata.normalize("NFC", w['text'])
 
-    # Tim dong giao dich dau tien tren Trang 1 (co 2 ngay o ben trai)
     col1_dates_p0 = sorted([w for w in p0_words if w['x0'] < 0.13 * W0 and _ACB_DATE_RE.match(w['text'])], key=lambda w: w['top'])
     col2_dates_p0 = [w for w in p0_words if 0.13 * W0 <= w['x0'] < 0.22 * W0 and _ACB_DATE_RE.match(w['text'])]
 
@@ -392,7 +391,6 @@ def extract_acb(pdf):
             first_tx_y = d1['top']
             break
 
-    # Lay dung cac tu o thanh tieu de bang ngay phia tren first_tx_y
     if first_tx_y:
         hdr_above = [w for w in p0_words if (first_tx_y - 0.08 * H0) <= w['top'] < (first_tx_y - 0.005 * H0)]
         p0_table_top = (max([w['bottom'] for w in hdr_above], default=first_tx_y - 20) + 1.5)
@@ -400,12 +398,10 @@ def extract_acb(pdf):
         hdr_above = []
         p0_table_top = 0.38 * H0
 
-    # Do chinh xac mep phai (x1) cua 3 cot tien tu tieu de
     x1_rut = max([w['x1'] for w in hdr_above if w['text'].lower() in ('ra', 'rút', 'debit', 'withdrawal') and w['x0'] > 0.45 * W0], default=0.674 * W0)
     x1_gui = max([w['x1'] for w in hdr_above if w['text'].lower() in ('vào', 'gửi', 'credit', 'deposit') and w['x0'] > x1_rut], default=0.805 * W0)
     x1_du = max([w['x1'] for w in hdr_above if w['text'].lower() in ('dư', 'balance') and w['x0'] > x1_gui], default=0.935 * W0)
 
-    # Luon tinh nguong can phai (x1) thay vi x0 de khong bao gio sot so dai nhu 150.000.000
     money_min_x1 = x1_rut - 0.05 * W0
     mid_rut_gui = (x1_rut + x1_gui) / 2
     mid_gui_du = (x1_gui + x1_du) / 2
@@ -427,7 +423,6 @@ def extract_acb(pdf):
         table_bottom = min(footer_tops) - 4 if footer_tops else H - 0.03 * H
         twords = [w for w in words if table_top <= w['top'] < table_bottom]
 
-        # Neu trang > 0, cap nhat lai ty le theo W trang hien tai neu can
         scale = W / W0 if W0 else 1.0
         cur_money_min_x1 = money_min_x1 * scale
         cur_mid_rg = mid_rut_gui * scale
@@ -501,7 +496,7 @@ def extract_acb(pdf):
                 elif w['x0'] < 0.215 * W:
                     gd_parts.append(txt)
                 elif w['x0'] < 0.265 * W and re.match(r'^\d{1,6}$', txt):
-                    continue  # So GD
+                    continue
                 elif w['x1'] >= cur_money_min_x1 and _ACB_MONEY_RE.match(txt):
                     if w['x1'] <= cur_mid_rg:
                         no_val = _vn_money_to_std_str(txt)
@@ -788,482 +783,4 @@ def extract_excel_or_csv(path):
 
 # =========================================================================
 #  4. DIEU PHOI, DOI CHIEU & XUAT EXCEL CHUAN 4 COT: NGAY, NO, CO, DIEN GIAI
-# =========================================================================
-def extract_any(path, password=None):
-    ext = os.path.splitext(path)[1].lower()
-    source_name = os.path.basename(path)
-
-    if ext in (".html", ".htm", ".xls"):
-        try:
-            with open(path, "rb") as f:
-                head = f.read(600).decode("utf-8", errors="ignore").strip().lower()
-            if any(tag in head for tag in ("<html", "<table", "<body", "<!doctype")):
-                return extract_html(path)
-        except Exception:
-            pass
-
-    if ext in (".html", ".htm"): return extract_html(path)
-    if ext in (".xlsx", ".xls", ".csv"):
-        try:
-            res = extract_excel_or_csv(path)
-            res['source_file'], res['loi'] = source_name, None
-            return res
-        except Exception as e:
-            return {'source_file': source_name, 'bank': 'LOI', 'header_info': {}, 'rows': [], 'loi': f"Loi Excel/CSV: {e}"}
-
-    try:
-        pdf = pdfplumber.open(path, password=password or "")
-    except Exception as e:
-        return {'source_file': source_name, 'bank': 'LOI', 'header_info': {}, 'rows': [], 'loi': f"Khong mo duoc PDF: {e}"}
-
-    with pdf:
-        txt = (pdf.pages[0].extract_text() or "") + "\n" + (pdf.pages[-1].extract_text() or "" if len(pdf.pages) > 1 else "")
-        bank = detect_bank(txt)
-        try:
-            if bank == "vietinbank": res = extract_vietinbank(pdf)
-            elif bank == "bidv": res = extract_bidv(pdf)
-            elif bank == "lpbank": res = extract_lpbank(pdf)
-            elif bank == "acb": res = extract_acb(pdf)
-            else: return {'source_file': source_name, 'bank': 'khong_xac_dinh', 'header_info': {}, 'rows': [], 'loi': 'Chua ho tro PDF ngan hang nay'}
-        except Exception as e:
-            return {'source_file': source_name, 'bank': bank, 'header_info': {}, 'rows': [], 'loi': f"Loi trich xuat PDF: {e}"}
-
-    res['source_file'], res['bank'], res['loi'] = source_name, bank, None
-    return res
-
-
-def validate(res):
-    warnings = []
-    rows = res['rows']
-    calc_debit = sum(to_num(r['No']) for r in rows)
-    calc_credit = sum(to_num(r['Co']) for r in rows)
-    if res.get('total_debit') and abs(calc_debit - to_num(res['total_debit'])) > 0.01:
-        warnings.append(f"Tong No khong khop: tinh {calc_debit:,.0f} vs sao ke {res['total_debit']}")
-    if res.get('total_credit') and abs(calc_credit - to_num(res['total_credit'])) > 0.01:
-        warnings.append(f"Tong Co khong khop: tinh {calc_credit:,.0f} vs sao ke {res['total_credit']}")
-    if res.get('beginning_balance') and any(r.get('SoDu') for r in rows):
-        bal = to_num(res['beginning_balance'])
-        for r in rows:
-            bal = bal - to_num(r['No']) + to_num(r['Co'])
-            if r.get('SoDu') and abs(bal - to_num(r['SoDu'])) > 0.01:
-                warnings.append(f"Dong STT {r['STT']}: so du tinh {bal:,.0f} != sao ke {to_num(r['SoDu']):,.0f}")
-    if not rows and not res.get('loi'):
-        warnings.append("Khong trich xuat duoc dong giao dich nao")
-    return warnings
-
-
-def make_sheet_name(file_name, used):
-    stem = re.sub(r'[\[\]:*?/\\]', ' ', os.path.splitext(file_name)[0]).strip().strip("'")
-    stem = re.sub(r'\s+', ' ', stem) or "Sheet"
-    base = stem[:31]
-    name, n = base, 1
-    while name.lower() in used:
-        n += 1
-        suffix = f" ({n})"
-        name = base[:31 - len(suffix)] + suffix
-    used.add(name.lower())
-    return name
-
-
-def build_xlsx(file_paths, out_path, password=None):
-    """File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai"""
-    FONT = "Arial"
-    header_font = Font(name=FONT, bold=True, color="2C3E50", size=11)
-    header_fill = PatternFill("solid", fgColor="DCE6F7")
-    normal_font = Font(name=FONT, size=10)
-    thin = Side(style="thin", color="D0D7E2")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    num_fmt = '#,##0'
-
-    all_results = []
-    for p in file_paths:
-        res = extract_any(p, password)
-        warns = [] if res.get('loi') else validate(res)
-        all_results.append((res, warns))
-
-    wb = Workbook()
-    wb.remove(wb.active)
-    used_names = set()
-
-    headers = ["Ngày", "Nợ", "Có", "Diễn giải"]
-    widths = [15, 18, 18, 65]
-
-    for res, warns in all_results:
-        name = make_sheet_name(res['source_file'], used_names)
-        ws = wb.create_sheet(name)
-
-        for c, h in enumerate(headers, start=1):
-            cell = ws.cell(1, c, h)
-            cell.font, cell.fill, cell.border = header_font, header_fill, border
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-
-        if res.get('loi'):
-            ws.cell(2, 1, "LỖI")
-            ws.cell(2, 4, res['loi'])
-        else:
-            for r_idx, gd in enumerate(res['rows'], start=2):
-                no_num = to_num(gd['No'])
-                co_num = to_num(gd['Co'])
-
-                c_ngay = ws.cell(r_idx, 1, gd['Ngay'])
-                c_no = ws.cell(r_idx, 2, no_num if no_num != 0 else None)
-                c_co = ws.cell(r_idx, 3, co_num if co_num != 0 else None)
-                c_dg = ws.cell(r_idx, 4, gd['MoTa'])
-
-                c_ngay.alignment = Alignment(horizontal="center", vertical="top")
-                c_no.alignment = Alignment(horizontal="right", vertical="top")
-                c_co.alignment = Alignment(horizontal="right", vertical="top")
-                c_dg.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-
-                for cell in (c_ngay, c_no, c_co, c_dg):
-                    cell.font = normal_font
-                    cell.border = border
-                if c_no.value is not None: c_no.number_format = num_fmt
-                if c_co.value is not None: c_co.number_format = num_fmt
-
-        for i, w in enumerate(widths, start=1):
-            ws.column_dimensions[get_column_letter(i)].width = w
-        ws.freeze_panes = "A2"
-
-    if not wb.sheetnames:
-        ws = wb.create_sheet("SaoKe")
-        for c, h in enumerate(headers, start=1):
-            ws.cell(1, c, h)
-
-    wb.save(out_path)
-    return all_results
-
-
-# =========================================================================
-#  5. GIAO DIEN WEB PASTEL + NUT NOI 3D + XEM TRUOC 4 COT
-# =========================================================================
-HTML_UI = """<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Công cụ trích xuất sao kê ngân hàng</title>
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, sans-serif;
-            margin: 0;
-            padding: 24px;
-            background: linear-gradient(135deg, #f3f6ff 0%, #fdf2f8 50%, #eefaf4 100%);
-            min-height: 100vh;
-            color: #3d485c;
-        }
-        .container {
-            max-width: 1180px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.96);
-            padding: 32px;
-            border-radius: 20px;
-            box-shadow: 0 12px 35px rgba(130, 145, 185, 0.16);
-            border: 1px solid #eaeef7;
-        }
-        h1 {
-            color: #4b659e;
-            margin: 0 0 8px 0;
-            font-size: 25px;
-            letter-spacing: -0.3px;
-        }
-        .subtitle {
-            color: #6b768c;
-            font-size: 14px;
-            margin-bottom: 22px;
-            line-height: 1.6;
-        }
-        .upload-zone {
-            border: 2.5px dashed #9cb8f3;
-            background: #f4f8ff;
-            padding: 32px 20px;
-            text-align: center;
-            border-radius: 16px;
-            cursor: pointer;
-            margin-bottom: 18px;
-            transition: all 0.2s ease;
-        }
-        .upload-zone:hover {
-            background: #e9f1ff;
-            border-color: #779be8;
-            transform: translateY(-1px);
-        }
-        .controls {
-            display: flex;
-            gap: 14px;
-            align-items: center;
-            flex-wrap: wrap;
-            margin-bottom: 16px;
-        }
-        input[type="password"], input[type="text"] {
-            padding: 11px 14px;
-            border: 1.5px solid #d9e2f2;
-            border-radius: 10px;
-            font-size: 14px;
-            background: #fbfcff;
-            color: #3d485c;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        input:focus { border-color: #8eb0f2; }
-
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 12px;
-            font-weight: 700;
-            font-size: 14px;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.15s ease;
-            transform: translateY(0);
-        }
-        .btn-primary {
-            background: linear-gradient(180deg, #91b3fa 0%, #769ce9 100%);
-            color: #ffffff;
-            box-shadow: 0 5px 0 #5b7fc9, 0 8px 16px rgba(118, 156, 233, 0.32);
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 7px 0 #5b7fc9, 0 12px 20px rgba(118, 156, 233, 0.38);
-        }
-        .btn-primary:active {
-            transform: translateY(3px);
-            box-shadow: 0 2px 0 #5b7fc9, 0 4px 8px rgba(118, 156, 233, 0.25);
-        }
-
-        .btn-download {
-            background: linear-gradient(180deg, #83ddb8 0%, #63c79e 100%);
-            color: #164f38;
-            box-shadow: 0 5px 0 #48a67f, 0 8px 16px rgba(99, 199, 158, 0.32);
-        }
-        .btn-download:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 7px 0 #48a67f, 0 12px 20px rgba(99, 199, 158, 0.40);
-        }
-        .btn-download:active {
-            transform: translateY(3px);
-            box-shadow: 0 2px 0 #48a67f, 0 4px 8px rgba(99, 199, 158, 0.25);
-        }
-
-        .tab-btn {
-            padding: 9px 16px;
-            border: 1px solid #dce3f0;
-            background: #f5f7fc;
-            color: #4b5d7a;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 600;
-            box-shadow: 0 3px 0 #d5dceb;
-            transition: all 0.15s ease;
-        }
-        .tab-btn:hover {
-            transform: translateY(-1px);
-            background: #ebf0fb;
-            box-shadow: 0 4px 0 #c9d2e6;
-        }
-        .tab-btn:active {
-            transform: translateY(2px);
-            box-shadow: 0 1px 0 #c9d2e6;
-        }
-        .tab-btn.active {
-            background: linear-gradient(180deg, #b8a9f5 0%, #9c8be8 100%);
-            color: #ffffff;
-            border-color: #8b78db;
-            box-shadow: 0 3px 0 #7562c7, 0 5px 10px rgba(156, 139, 232, 0.28);
-        }
-
-        #fileList { margin: 10px 0 0 0; font-size: 13px; color: #5b7fc9; font-weight: 600; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
-        th, td { border: 1px solid #e6ebf5; padding: 10px 12px; text-align: left; }
-        th {
-            background: #e4ecfc;
-            color: #364b75;
-            font-weight: 700;
-            position: sticky;
-            top: 0;
-            z-index: 2;
-        }
-        tbody tr:nth-child(even) { background: #fafbfe; }
-        tbody tr:hover { background: #f2f6ff; }
-        .text-right { text-align: right; }
-        .text-center { text-align: center; }
-        .debit { color: #d45b68; font-weight: 600; }
-        .credit { color: #39996d; font-weight: 600; }
-        .ok { background: #e6f9ef; color: #227850; font-weight: 700; padding: 4px 10px; border-radius: 6px; display: inline-block; }
-        .warn { background: #fde9eb; color: #b8424d; font-weight: 700; padding: 4px 10px; border-radius: 6px; display: inline-block; }
-        .loader { display: none; color: #6787cc; font-weight: 700; margin: 14px 0; }
-        .preview-section { margin-top: 26px; border-top: 2px dashed #e8edf7; padding-top: 20px; }
-        .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-        .preview-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-        .scroll-box { max-height: 480px; overflow: auto; border: 1px solid #e1e7f2; border-radius: 12px; box-shadow: inset 0 1px 4px rgba(0,0,0,0.03); }
-    </style>
-</head>
-<body>
-<div class="container">
-    <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
-    <div class="subtitle">
-        Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • File Excel tải về gồm 4 cột: <b>Ngày, Nợ, Có, Diễn giải</b>.
-    </div>
-
-    <div class="upload-zone" onclick="document.getElementById('files').click()">
-        <input type="file" id="files" multiple accept=".pdf,.html,.htm,.xlsx,.xls,.csv" style="display:none" onchange="showFiles()">
-        <div style="font-size: 16px; font-weight: bold; color: #5b7fc9;">📂 Bấm vào đây để chọn 1 hoặc nhiều file sao kê</div>
-        <div id="fileList"></div>
-    </div>
-
-    <div class="controls">
-        <input type="password" id="pwd" style="width: 320px; max-width: 100%;" placeholder="🔑 Mật khẩu file PDF (nếu có)">
-        <button class="btn btn-primary" onclick="uploadAndProcess()">✨ BẮT ĐẦU TRÍCH XUẤT & XEM TRƯỚC</button>
-    </div>
-
-    <div id="loader" class="loader">⏳ Đang xử lý và đối chiếu dữ liệu, vui lòng đợi...</div>
-
-    <div id="resultBox" style="display:none;">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
-            <h3 style="margin: 0; color: #4b659e;">📊 Bảng Đối Chiếu Tổng Quan</h3>
-            <a id="downloadLink" class="btn btn-download" href="#" download="SaoKe_4Cot_Chuan.xlsx">📥 TẢI FILE EXCEL (4 CỘT)</a>
-        </div>
-
-        <div style="border-radius: 12px; overflow: hidden; border: 1px solid #e6ebf5;">
-            <table>
-                <thead>
-                    <tr>
-                        <th>File nguồn</th><th>Ngân hàng</th><th>Số TK</th>
-                        <th class="text-right">Số GD</th><th class="text-right">Tổng Nợ</th>
-                        <th class="text-right">Tổng Có</th><th>Đối chiếu</th>
-                    </tr>
-                </thead>
-                <tbody id="summaryBody"></tbody>
-            </table>
-        </div>
-
-        <div class="preview-section">
-            <h3 style="margin: 0 0 12px 0; color: #4b659e;">🔍 Xem Trước Chi Tiết (4 Cột Chuẩn Excel)</h3>
-            <div id="tabs" class="tabs"></div>
-            <div class="preview-toolbar">
-                <div id="sheetMeta" style="font-size: 13px; color: #5b6982; font-weight: 500;"></div>
-                <input type="text" id="searchBox" style="width: 290px;" placeholder="🔎 Tìm theo ngày, số tiền, diễn giải..." oninput="filterPreview()">
-            </div>
-            <div class="scroll-box">
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="text-center" style="width: 115px;">Ngày</th>
-                            <th class="text-right" style="width: 145px;">Nợ</th>
-                            <th class="text-right" style="width: 145px;">Có</th>
-                            <th>Diễn giải</th>
-                        </tr>
-                    </thead>
-                    <tbody id="previewBody"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-let allSheetsData = [];
-let activeIdx = 0;
-
-function showFiles() {
-    const inp = document.getElementById('files');
-    const names = Array.from(inp.files).map(f => f.name);
-    document.getElementById('fileList').innerText = names.length ? `Đã chọn ${names.length} file: ${names.join(', ')}` : '';
-}
-
-async function uploadAndProcess() {
-    const inp = document.getElementById('files');
-    if (!inp.files.length) { alert('Vui lòng chọn ít nhất 1 file sao kê!'); return; }
-
-    const formData = new FormData();
-    for (let f of inp.files) formData.append('files', f);
-    formData.append('password', document.getElementById('pwd').value);
-
-    document.getElementById('loader').style.display = 'block';
-    document.getElementById('resultBox').style.display = 'none';
-
-    try {
-        const res = await fetch('/process', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (data.error) { alert(data.error); return; }
-
-        const tbody = document.getElementById('summaryBody');
-        tbody.innerHTML = '';
-        data.summary.forEach(r => {
-            let tr = document.createElement('tr');
-            let cls = r.status === 'Khớp chuẩn' ? 'ok' : 'warn';
-            tr.innerHTML = `<td>${r.file}</td><td><b>${r.bank}</b></td><td>${r.account}</td>
-                <td class="text-right">${r.count}</td><td class="text-right debit">${r.debit}</td>
-                <td class="text-right credit">${r.credit}</td><td><span class="${cls}">${r.status}</span></td>`;
-            tbody.appendChild(tr);
-        });
-
-        allSheetsData = data.sheets || [];
-        renderTabs();
-
-        const dl = document.getElementById('downloadLink');
-        dl.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + data.file_b64;
-        document.getElementById('resultBox').style.display = 'block';
-    } catch (e) {
-        alert('Có lỗi xảy ra: ' + e);
-    } finally {
-        document.getElementById('loader').style.display = 'none';
-    }
-}
-
-function renderTabs() {
-    const tabsEl = document.getElementById('tabs');
-    tabsEl.innerHTML = '';
-    allSheetsData.forEach((s, idx) => {
-        let btn = document.createElement('button');
-        btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
-        btn.innerText = `${s.file} (${s.rows.length})`;
-        btn.onclick = () => selectTab(idx);
-        tabsEl.appendChild(btn);
-    });
-    if (allSheetsData.length > 0) selectTab(0);
-}
-
-function selectTab(idx) {
-    activeIdx = idx;
-    document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
-    document.getElementById('searchBox').value = '';
-    const s = allSheetsData[idx];
-    document.getElementById('sheetMeta').innerHTML =
-        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Tổng số giao dịch: <b>${s.rows.length}</b>`;
-    renderPreviewRows(s.rows);
-}
-
-function filterPreview() {
-    const kw = document.getElementById('searchBox').value.trim().toLowerCase();
-    const rows = allSheetsData[activeIdx]?.rows || [];
-    if (!kw) { renderPreviewRows(rows); return; }
-    const filtered = rows.filter(r =>
-        (r.Ngay || '').toLowerCase().includes(kw) ||
-        (r.MoTa || '').toLowerCase().includes(kw) ||
-        (r.No || '').toLowerCase().includes(kw) ||
-        (r.Co || '').toLowerCase().includes(kw)
-    );
-    renderPreviewRows(filtered);
-}
-
-function renderPreviewRows(rows) {
-    const tbody = document.getElementById('previewBody');
-    tbody.innerHTML = '';
-    if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center" style="color:#888;padding:24px;">Không có dữ liệu giao dịch phù hợp</td></tr>';
-        return;
-    }
-    rows.forEach(r => {
-        let tr = document.createElement('tr');
-        let noDisp = (r.No && r.No !== '0') ? r.No : '';
-        let coDisp = (r.Co && r.Co !== '0') ? r.Co : '';
-        tr.innerHTML = `
-            <td class="text-center"><b>${r.Ngay}</b></td>
-            <td class="text-right debit">${noDisp}</td>
-            <td class="text-right credit">${coDisp}</td>
+# ============
