@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 TRICH XUAT SAO KE NGAN HANG (PDF / HTML / EXCEL / CSV) -> EXCEL
-- PDF: VietinBank (fix loi ngay yyyy-mm-dd), BIDV, LPBank (7 cot & 10 cot), ACB
+- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (A Chau - fix cat dong & cot chuan xac)
 - HTML: VPBank (T24 Core)
-- Excel / CSV: Sacombank, Agribank IPCAS (ke ca .XLS ruot CSV), Excel khac
+- Excel / CSV: Sacombank (fix loi ngay 17-07-2025), Agribank IPCAS, Excel khac
 - Dinh dang ngay chuan: dd/mm/yyyy
-- Web Flask: Co bang Xem truoc (Preview) tung giao dich va tim kiem nhanh truoc khi tai Excel.
+- Web Flask: Xem truoc chi tiet tung file & tim kiem nhanh truoc khi tai Excel.
 """
 import base64
 import csv
@@ -30,7 +30,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 
 # =========================================================================
-#  1. CHUAN HOA NGAY (dd/mm/yyyy) & TIEN TE (DA FIX LOI yyyy-mm-dd)
+#  1. CHUAN HOA NGAY (dd/mm/yyyy) & XU LY TIEN TE AN TOAN
 # =========================================================================
 _ENG_MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
@@ -51,21 +51,21 @@ def normalize_date_ddmmyyyy(val):
             y = y + 2000 if y < 100 else y
             return f"{d:02d}/{mon:02d}/{y:04d}"
 
-    # 2. Uu tien bat chuan yyyy-mm-dd hoac yyyy/mm/dd TRUOC (fix loi VietinBank cat nham 2025-10-02 thanh 25/10/2002)
+    # 2. Uu tien yyyy-mm-dd hoac yyyy/mm/dd truoc (fix VietinBank)
     m_iso = re.search(r'(?<!\d)(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?!\d)', s)
     if m_iso:
         y, m, d = int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3))
         if 1 <= m <= 12 and 1 <= d <= 31:
             return f"{d:02d}/{m:02d}/{y:04d}"
 
-    # 3. Dang dd/mm/yyyy hoac dd-mm-yyyy (nam 4 chu so)
+    # 3. Dang dd/mm/yyyy hoac dd-mm-yyyy
     m_num4 = re.search(r'(?<!\d)(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?!\d)', s)
     if m_num4:
         d, m, y = int(m_num4.group(1)), int(m_num4.group(2)), int(m_num4.group(3))
         if 1 <= m <= 12 and 1 <= d <= 31:
             return f"{d:02d}/{m:02d}/{y:04d}"
 
-    # 4. Dang dd/mm/yy hoac dd-mm-yy (nam 2 chu so)
+    # 4. Dang dd/mm/yy hoac dd-mm-yy
     m_num2 = re.search(r'(?<!\d)(\d{1,2})[-/](\d{1,2})[-/](\d{2})(?!\d)', s)
     if m_num2:
         d, m, y = int(m_num2.group(1)), int(m_num2.group(2)), int(m_num2.group(3)) + 2000
@@ -78,16 +78,36 @@ def normalize_date_ddmmyyyy(val):
 def to_num(s):
     if s is None or s == "" or s == "-NIL-":
         return 0.0
-    return float(re.sub(r'[^\d.\-]', '', str(s)) or 0)
+    cleaned = re.sub(r'[^\d.\-]', '', str(s))
+    if not cleaned or cleaned in ('-', '.', '-.'):
+        return 0.0
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def _is_money_token(val):
+    """Kiem tra chuoi co thuc su la so tien hop le khong (chan ngay thang nhu 17-07-2025)"""
+    s = str(val or "").strip()
+    if not s or s == "-NIL-":
+        return False
+    if re.search(r'\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', s):
+        return False
+    return bool(re.match(r'^-?\d{1,3}([.,]\d{3})*([.,]\d{1,2})?$|^-?\d+([.,]\d{1,2})?$', s))
 
 
 def _vn_money_to_std_str(val):
     s = str(val or "").strip()
-    if not s or s == "-NIL-":
+    if not _is_money_token(s):
         return "0"
     if re.match(r'^-?\d{1,3}(\.\d{3})+(,\d+)?$', s):
         s = s.replace(".", "").replace(",", ".")
-        return f"{abs(float(s)):,.0f}"
+        try:
+            num = abs(float(s))
+            return f"{num:,.0f}" if num != 0 else "0"
+        except ValueError:
+            return "0"
     num = to_num(s.replace(",", ""))
     return f"{abs(num):,.0f}" if num != 0 else "0"
 
@@ -109,7 +129,7 @@ def detect_bank(text):
 
 
 # =========================================================================
-#  3A. VIETINBANK PDF (Fix lay chuan ngay theo toa do x0 nho nhat)
+#  3A. VIETINBANK PDF
 # =========================================================================
 def _classify_vtb(w):
     x0, x1 = w['x0'], w['x1']
@@ -179,7 +199,6 @@ def extract_vietinbank(pdf):
                 ws = sorted(buckets.get(col, []), key=lambda w: (round(w['top']), w['x0']))
                 return " ".join(w['text'] for w in ws).strip()
 
-            # Uu tien lay tu trong cot Ngay nam sat mep trai nhat co dinh dang ngay
             ngay_words = sorted(buckets.get("Ngay", []), key=lambda w: (w['x0'], round(w['top'])))
             ngay_chuan = ""
             for nw in ngay_words:
@@ -278,7 +297,7 @@ def extract_bidv(pdf):
 
 
 # =========================================================================
-#  3C. LPBANK PDF (7 cot moi & 10 cot cu)
+#  3C. LPBANK PDF (7 cot moi & 10 cot cu + ghep dong qua trang)
 # =========================================================================
 def _clean_lpb(v):
     if not isinstance(v, str) or not v:
@@ -378,9 +397,9 @@ def extract_lpbank(pdf):
 
 
 # =========================================================================
-#  3D. ACB PDF
+#  3D. ACB PDF (DA FIX: Tu dong tim dung tieu de bang + dung dai nen xam cat dong)
 # =========================================================================
-_ACB_MONEY_RE = re.compile(r'^\d{1,3}(\.\d{3})+$')
+_ACB_MONEY_RE = re.compile(r'^\d{1,3}(\.\d{3})*$')
 _ACB_DATE_RE = re.compile(r'^\d{2}/\d{2}/\d{4}$')
 
 def extract_acb(pdf):
@@ -410,67 +429,121 @@ def extract_acb(pdf):
     header_info['bank'] = "ACB (Ngan hang TMCP A Chau)"
 
     p0_words = pdf.pages[0].extract_words(use_text_flow=False, keep_blank_chars=False)
-    x_hl_end, x_gd_end, x_sogd_end = 90.0, 145.0, 180.0
-    x1_rut, x1_gui, x1_du = 435.0, 515.0, 575.0
-    p0_table_top = 240.0
 
+    # Tim dong tieu de bang giao dich (phai co chu "Nội" va chu "rút" / "gửi" gan cung hang ngang, tranh hop tom tat)
+    header_y = None
     for w in p0_words:
-        if w['text'] == 'ra' and any(w2['text'] == 'rút' and abs(w2['top'] - w['top']) < 3 for w2 in p0_words):
-            x1_rut = w['x1']; p0_table_top = max(p0_table_top, w['bottom'] + 3)
-        elif w['text'] == 'vào' and any(w2['text'] == 'gửi' and abs(w2['top'] - w['top']) < 3 for w2 in p0_words):
-            x1_gui = w['x1']; p0_table_top = max(p0_table_top, w['bottom'] + 3)
-        elif w['text'] == 'dư' and w['x0'] > 450 and any(w2['text'] == 'Số' and abs(w2['top'] - w['top']) < 3 and w2['x0'] > 450 for w2 in p0_words):
-            x1_du = w['x1']
-        elif w['text'] == 'giao' and 70 < w['x0'] < 130 and w['top'] > 180: x_hl_end = w['x0'] - 4
-        elif w['text'] == 'GD' and 120 < w['x0'] < 175 and w['top'] > 180: x_gd_end = w['x0'] - 6
-        elif w['text'] == 'Nội' and 150 < w['x0'] < 210 and w['top'] > 180: x_sogd_end = w['x0'] - 4
+        if w['text'] == 'Nội' and 120 < w['x0'] < 220:
+            if any(w2['text'] in ('rút', 'gửi', 'tiền') and w2['x0'] > 300 and abs(w2['top'] - w['top']) < 18 for w2 in p0_words):
+                header_y = w['top']
+                break
+
+    if header_y is None:
+        header_y = 320.0
+
+    hdr_words = [w for w in p0_words if (header_y - 12) <= w['top'] <= (header_y + 28)]
+    p0_table_top = max([w['bottom'] for w in hdr_words], default=header_y + 25) + 2
+
+    # Tinh ranh gioi cot chinh xac tu tieu de
+    col1_words = [w for w in hdr_words if w['x0'] < 75]
+    col2_words = [w for w in hdr_words if 75 <= w['x0'] < 128]
+    col3_words = [w for w in hdr_words if 128 <= w['x0'] < 158]
+    col4_words = [w for w in hdr_words if 158 <= w['x0'] < 250]
+
+    x_hl_end = ((max([w['x1'] for w in col1_words], default=72) + min([w['x0'] for w in col2_words], default=80)) / 2)
+    x_gd_end = ((max([w['x1'] for w in col2_words], default=120) + min([w['x0'] for w in col3_words], default=134)) / 2)
+    x_sogd_end = ((max([w['x1'] for w in col3_words], default=150) + min([w['x0'] for w in col4_words], default=160)) / 2)
+
+    # Tim toa do mep phai 3 cot tien tu tieu de
+    x1_rut = max([w['x1'] for w in hdr_words if w['text'] in ('ra', 'rút', 'tiền') and 340 < w['x0'] < 430], default=405.0)
+    x1_gui = max([w['x1'] for w in hdr_words if w['text'] in ('vào', 'gửi', 'tiền') and 430 < w['x0'] < 500], default=480.0)
+    x1_du = max([w['x1'] for w in hdr_words if w['text'] in ('dư', 'Số') and w['x0'] > 500], default=557.0)
+
+    mid_rut_gui = (x1_rut + x1_gui) / 2
+    mid_gui_du = (x1_gui + x1_du) / 2
+    x_money_start = x1_rut - 75
 
     stt_counter = 0
     for pi, page in enumerate(pdf.pages):
         words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
-        table_top = p0_table_top if pi == 0 else 10.0
+        table_top = p0_table_top if pi == 0 else 15.0
+
         footer_tops = [w['top'] for w in words if (w['text'] == 'NGÂN' and w['x0'] > 300) or (w['text'] == '/' and w['top'] > 760)]
         table_bottom = min(footer_tops) - 5 if footer_tops else page.height - 25
 
         twords = [w for w in words if table_top <= w['top'] < table_bottom]
-        anchors = sorted([w for w in twords if w['x0'] < x_hl_end and _ACB_DATE_RE.match(w['text'])], key=lambda w: w['top'])
+
+        # Tim neo ngay o cot 1 (Ngay hieu luc) va loc trung lap theo chieu doc
+        raw_anchors = sorted([w for w in twords if w['x0'] < x_hl_end and _ACB_DATE_RE.match(w['text'])], key=lambda w: (w['top'], w['x0']))
+        anchors = []
+        for a in raw_anchors:
+            if not anchors or abs(a['top'] - anchors[-1]['top']) >= 10:
+                anchors.append(a)
         if not anchors:
             continue
 
-        cuts = [table_top]
-        for i in range(len(anchors) - 1):
-            y_a, y_b = anchors[i]['top'], anchors[i + 1]['top']
-            desc_words = [w for w in twords if (y_a - 2) <= w['top'] <= (y_b + 2) and x_sogd_end <= w['x0'] < (x1_rut - 70)]
-            y_lines = sorted(set(round(w['top'], 1) for w in desc_words))
-            merged_y = []
-            for y in y_lines:
-                if not merged_y or y - merged_y[-1] > 3.5: merged_y.append(y)
-            if len(merged_y) >= 2:
-                max_gap, best_cut = -1, (y_a + y_b) / 2
-                for k in range(len(merged_y) - 1):
-                    if merged_y[k + 1] - merged_y[k] > max_gap:
-                        max_gap = merged_y[k + 1] - merged_y[k]
-                        best_cut = (merged_y[k] + merged_y[k + 1]) / 2
-                cuts.append(best_cut)
-            else:
-                cuts.append((y_a + y_b) / 2)
-        cuts.append(table_bottom)
+        # Thu doc cac dai nen mau xam (rects/curves) de lay ranh gioi tung dong chinh xac tuyet doi
+        raw_shapes = [s for s in (list(page.rects) + list(page.curves))
+                      if s['width'] > 400 and 14 < s['height'] < 250 and s['top'] >= table_top - 4 and s['bottom'] <= table_bottom + 4]
+        bg_shapes = []
+        for s in sorted(raw_shapes, key=lambda x: x['top']):
+            if not bg_shapes or abs(s['top'] - bg_shapes[-1]['top']) > 4:
+                bg_shapes.append(s)
+
+        row_spans = []
+        if len(bg_shapes) >= max(1, len(anchors) // 3):
+            for i, a in enumerate(anchors):
+                ay = (a['top'] + a['bottom']) / 2
+                inside = next((s for s in bg_shapes if (s['top'] - 2) <= ay <= (s['bottom'] + 2)), None)
+                if inside:
+                    y_s, y_e = inside['top'] - 1, inside['bottom'] + 1
+                else:
+                    above = [s for s in bg_shapes if s['bottom'] <= ay + 2]
+                    below = [s for s in bg_shapes if s['top'] >= ay - 2]
+                    y_s = (above[-1]['bottom'] - 1) if above else table_top
+                    y_e = (below[0]['top'] + 1) if below else table_bottom
+                row_spans.append((y_s, y_e))
+        else:
+            # Du phong neu PDF khong co nen xam: cat theo khe ho lon nhat giua cac dong mo ta
+            cuts = [table_top]
+            for i in range(len(anchors) - 1):
+                y_a, y_b = anchors[i]['top'], anchors[i + 1]['top']
+                desc_w = [w for w in twords if (y_a - 2) <= w['top'] <= (y_b + 2) and x_sogd_end <= w['x0'] < x_money_start]
+                y_lines = []
+                for y in sorted(set(round(w['top'], 1) for w in desc_w)):
+                    if not y_lines or y - y_lines[-1] > 3.5: y_lines.append(y)
+                if len(y_lines) >= 2:
+                    max_gap, best_cut = -1, (y_a + y_b) / 2
+                    for k in range(len(y_lines) - 1):
+                        if y_lines[k + 1] - y_lines[k] > max_gap:
+                            max_gap = y_lines[k + 1] - y_lines[k]
+                            best_cut = (y_lines[k] + y_lines[k + 1]) / 2
+                    cuts.append(best_cut)
+                else:
+                    cuts.append((y_a + y_b) / 2)
+            cuts.append(table_bottom)
+            row_spans = [(cuts[i], cuts[i + 1]) for i in range(len(anchors))]
 
         for i in range(len(anchors)):
-            y_start, y_end = cuts[i], cuts[i + 1]
+            y_start, y_end = row_spans[i]
             row_words = [w for w in twords if y_start <= w['top'] < y_end]
             hl_parts, gd_parts, sogd_parts, mota_parts = [], [], [], []
             no_val, co_val, sodu_val = "0", "0", ""
 
             for w in sorted(row_words, key=lambda x: (round(x['top']), x['x0'])):
                 txt = w['text']
-                if w['x0'] < x_hl_end: hl_parts.append(txt)
-                elif w['x0'] < x_gd_end: gd_parts.append(txt)
-                elif w['x0'] < x_sogd_end: sogd_parts.append(txt)
-                elif _ACB_MONEY_RE.match(txt) and abs(w['x1'] - x1_rut) <= 18: no_val = _vn_money_to_std_str(txt)
-                elif _ACB_MONEY_RE.match(txt) and abs(w['x1'] - x1_gui) <= 18: co_val = _vn_money_to_std_str(txt)
-                elif _ACB_MONEY_RE.match(txt) and abs(w['x1'] - x1_du) <= 18: sodu_val = _vn_money_to_std_str(txt)
-                else: mota_parts.append(txt)
+                if w['x0'] < x_hl_end:
+                    hl_parts.append(txt)
+                elif w['x0'] < x_gd_end:
+                    gd_parts.append(txt)
+                elif w['x0'] < x_sogd_end:
+                    sogd_parts.append(txt)
+                elif w['x1'] > x_money_start and _ACB_MONEY_RE.match(txt):
+                    if w['x1'] < mid_rut_gui: no_val = _vn_money_to_std_str(txt)
+                    elif w['x1'] < mid_gui_du: co_val = _vn_money_to_std_str(txt)
+                    else: sodu_val = _vn_money_to_std_str(txt)
+                else:
+                    mota_parts.append(txt)
 
             stt_counter += 1
             ngay_gd_str = " ".join(gd_parts)
@@ -619,7 +692,7 @@ def extract_html(path):
 
 
 # =========================================================================
-#  3F. EXCEL / CSV (SACOMBANK + AGRIBANK IPCAS + CHUNG)
+#  3F. EXCEL / CSV (SACOMBANK DA FIX LOI 17-07-2025 + AGRIBANK + CHUNG)
 # =========================================================================
 def _read_tabular_light(path):
     with open(path, "rb") as f:
@@ -702,28 +775,50 @@ def extract_excel_or_csv(path):
                     'ending_balance': f"{to_num(end_bal):,.0f}" if end_bal else None,
                     'total_debit': None, 'total_credit': None}
 
-    # 2. SACOMBANK
+    # 2. SACOMBANK (Da fix bo qua dong thong tin dau trang co ngay mo tai khoan 17-07-2025)
     vnd_rows = [r for r in rows if "VND" in [str(c).strip() for c in r]]
     if len(vnd_rows) >= 2:
         header_info, all_rows, stt = {'bank': 'Sacombank'}, [], 0
         for r in rows[:25]:
             line = " ".join(str(c) for c in r)
             m = re.search(r'(?:Số|Tài khoản):\s*([0-9A-Za-z]+)', line)
-            if m: header_info['account_no'] = m.group(1)
+            if m and not header_info.get('account_no'):
+                header_info['account_no'] = m.group(1)
+
         for r in vnd_rows:
             r_str = [str(c).strip() for c in r]
             v_idx = r_str.index("VND")
             desc = r_str[v_idx - 1] if v_idx > 0 else ""
-            d_val = next((normalize_date_ddmmyyyy(v) for v in r_str[:v_idx] if re.search(r'\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', v)), "")
+
+            # Bo qua dong metadata "Loại tiền: VND Ngày mở: 17-07-2025"
+            if "Loại tiền" in desc or "Loại tiền" in " ".join(r_str[:v_idx]):
+                continue
+
+            # Bat buoc phai co ngay giao dich o truoc cot VND moi xu ly so tien
+            d_val = ""
+            for v in r_str[:v_idx]:
+                if re.search(r'\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', v):
+                    d_val = normalize_date_ddmmyyyy(v)
+                    break
+            if not d_val:
+                continue
+
             no_str, co_str = "0", "0"
             for j in range(v_idx + 1, len(r_str)):
                 val = r_str[j]
-                if val.replace(".", "").replace(",", "").replace("-", "").isdigit() and int(val.replace(".", "").replace(",", "").replace("-", "")) > 0:
-                    if j - v_idx <= 4: no_str = _vn_money_to_std_str(val)
-                    else: co_str = _vn_money_to_std_str(val)
-            if d_val and (no_str != "0" or co_str != "0" or desc):
+                if _is_money_token(val):
+                    std_val = _vn_money_to_std_str(val)
+                    if std_val != "0":
+                        if j - v_idx <= 4: no_str = std_val
+                        else: co_str = std_val
+
+            if no_str != "0" or co_str != "0" or desc:
                 stt += 1
-                all_rows.append({'STT': str(stt), 'Ngay': d_val, 'MoTa': desc, 'No': no_str, 'Co': co_str, 'SoDu': "", 'ThongTinThem': f"Ma GD: {r_str[2] if len(r_str) > 2 else ''}"})
+                all_rows.append({
+                    'STT': str(stt), 'Ngay': d_val, 'MoTa': desc,
+                    'No': no_str, 'Co': co_str, 'SoDu': "",
+                    'ThongTinThem': f"Ma GD: {r_str[2] if len(r_str) > 2 else ''}"
+                })
         if all_rows:
             return {'bank': 'sacombank', 'header_info': header_info, 'rows': all_rows, 'beginning_balance': None, 'ending_balance': None, 'total_debit': None, 'total_credit': None}
 
@@ -733,8 +828,8 @@ def extract_excel_or_csv(path):
         r_str = [str(x).strip() for x in r]
         d_val = next((normalize_date_ddmmyyyy(x) for x in r_str if re.match(r'^(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})', x)), None)
         if not d_val: continue
-        nums = [_vn_money_to_std_str(x) for x in r_str if re.match(r'^-?[\d,.]+$', x) and to_num(x.replace(".", "")) != 0]
-        texts = [x for x in r_str if len(x) > 5 and not re.match(r'^-?[\d,.]+$', x) and not re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', x)]
+        nums = [_vn_money_to_std_str(x) for x in r_str if _is_money_token(x) and _vn_money_to_std_str(x) != "0"]
+        texts = [x for x in r_str if len(x) > 5 and not _is_money_token(x) and not re.match(r'^(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})', x)]
         if nums or texts:
             stt += 1
             all_rows.append({'STT': str(stt), 'Ngay': d_val, 'MoTa': texts[0] if texts else "", 'No': nums[0] if nums else "0", 'Co': nums[1] if len(nums) > 1 else "0", 'SoDu': "", 'ThongTinThem': ""})
@@ -958,7 +1053,7 @@ def build_xlsx(file_paths, out_path, password=None):
 
 
 # =========================================================================
-#  5. GIAO DIEN WEB FLASK (CO XEM TRUOC TUNG FILE & TIM KIEM NHANH)
+#  5. GIAO DIEN WEB FLASK (XEM TRUOC CHI TIET + TIM KIEM)
 # =========================================================================
 HTML_UI = """<!DOCTYPE html>
 <html lang="vi">
@@ -1038,7 +1133,6 @@ HTML_UI = """<!DOCTYPE html>
             <tbody id="summaryBody"></tbody>
         </table>
 
-        <!-- Khu vực xem trước chi tiết từng giao dịch -->
         <div class="preview-section">
             <h3 style="margin: 0 0 12px 0; color: #1F4E78;">🔍 Xem Trước Chi Tiết Từng File (Trước Khi Tải)</h3>
             <div id="tabs" class="tabs"></div>
