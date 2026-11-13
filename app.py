@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 CONG CU TRICH XUAT SAO KE NGAN HANG
-- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (fix nhan dien theo ty le trang)
+- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (fix nhan dien cot tien theo mep phai x1)
 - HTML: VPBank (T24 Core)
-- Excel / CSV: Sacombank (fix 17-07-2025), Agribank IPCAS, Excel khac
+- Excel / CSV: Sacombank, Agribank IPCAS, Excel khac
 - Dinh dang ngay: dd/mm/yyyy
 - File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai
 """
@@ -13,6 +13,7 @@ from html.parser import HTMLParser
 import os
 import re
 import tempfile
+import unicodedata
 import webbrowser
 from threading import Timer
 
@@ -110,7 +111,7 @@ def _vn_money_to_std_str(val):
 #  2. NHAN DIEN NGAN HANG TU PDF
 # =========================================================================
 def detect_bank(text):
-    t = text or ""
+    t = unicodedata.normalize("NFC", text or "")
     tl = t.lower()
     if "ngân hàng tmcp công thương việt nam" in tl or "efast" in tl or "vietinbank.vn" in tl:
         return "vietinbank"
@@ -346,41 +347,44 @@ def extract_lpbank(pdf):
 
 
 # =========================================================================
-#  3D. ACB PDF (DA NANG CAP: Dung ty le % chieu rong trang & cat dong chuan xac)
+#  3D. ACB PDF (DA FIX: Phan loai 3 cot tien bang mep phai x1 tu tieu de)
 # =========================================================================
-_ACB_MONEY_RE = re.compile(r'^\d{1,3}(\.\d{3})+$|^\d{1,3}$')
+_ACB_MONEY_RE = re.compile(r'^\d{1,3}([.,]\d{3})+$|^\d{1,3}$')
 _ACB_DATE_RE = re.compile(r'^\d{2}/\d{2}/\d{4}$')
 
 def extract_acb(pdf):
     header_info, all_rows = {}, []
     beginning_balance = ending_balance = total_debit = total_credit = None
 
-    p0_text = pdf.pages[0].extract_text() or ""
+    p0 = pdf.pages[0]
+    W0, H0 = p0.width, p0.height
+    p0_text = unicodedata.normalize("NFC", p0.extract_text() or "")
+
     for line in p0_text.split("\n"):
         line = line.strip()
         if line.startswith("Số tài khoản"):
             m = re.search(r'(\d{5,})', line)
             if m: header_info['account_no'] = m.group(1)
         elif line.startswith("Số dư đầu"):
-            m = re.search(r'([\d.]+)$', line)
+            m = re.search(r'([\d.,]+)$', line)
             if m: beginning_balance = _vn_money_to_std_str(m.group(1))
         elif line.startswith("Tổng tiền rút ra"):
-            m = re.search(r'([\d.]+)$', line)
+            m = re.search(r'([\d.,]+)$', line)
             if m: total_debit = _vn_money_to_std_str(m.group(1))
         elif line.startswith("Tổng tiền gửi vào"):
-            m = re.search(r'([\d.]+)$', line)
+            m = re.search(r'([\d.,]+)$', line)
             if m: total_credit = _vn_money_to_std_str(m.group(1))
         elif line.startswith("Số dư cuối"):
-            m = re.search(r'([\d.]+)$', line)
+            m = re.search(r'([\d.,]+)$', line)
             if m: ending_balance = _vn_money_to_std_str(m.group(1))
 
-    # Tim dong giao dich dau tien tren Trang 1 (co 2 ngay o ben trai: Ngay hieu luc & Ngay giao dich)
-    p0 = pdf.pages[0]
-    W0, H0 = p0.width, p0.height
     p0_words = p0.extract_words(use_text_flow=False, keep_blank_chars=False)
+    for w in p0_words:
+        w['text'] = unicodedata.normalize("NFC", w['text'])
 
+    # Tim dong giao dich dau tien tren Trang 1 (co 2 ngay o ben trai)
     col1_dates_p0 = sorted([w for w in p0_words if w['x0'] < 0.13 * W0 and _ACB_DATE_RE.match(w['text'])], key=lambda w: w['top'])
-    col2_dates_p0 = [w for w in p0_words if 0.13 * W0 <= w['x0'] < 0.215 * W0 and _ACB_DATE_RE.match(w['text'])]
+    col2_dates_p0 = [w for w in p0_words if 0.13 * W0 <= w['x0'] < 0.22 * W0 and _ACB_DATE_RE.match(w['text'])]
 
     first_tx_y = None
     for d1 in col1_dates_p0:
@@ -388,30 +392,47 @@ def extract_acb(pdf):
             first_tx_y = d1['top']
             break
 
-    # Xac dinh table_top cua trang 1 ngay duoi tieu de phia tren first_tx_y
+    # Lay dung cac tu o thanh tieu de bang ngay phia tren first_tx_y
     if first_tx_y:
-        hdr_above = [w for w in p0_words if (first_tx_y - 0.08 * H0) <= w['top'] < (first_tx_y - 0.006 * H0)]
+        hdr_above = [w for w in p0_words if (first_tx_y - 0.08 * H0) <= w['top'] < (first_tx_y - 0.005 * H0)]
         p0_table_top = (max([w['bottom'] for w in hdr_above], default=first_tx_y - 20) + 1.5)
     else:
+        hdr_above = []
         p0_table_top = 0.38 * H0
+
+    # Do chinh xac mep phai (x1) cua 3 cot tien tu tieu de
+    x1_rut = max([w['x1'] for w in hdr_above if w['text'].lower() in ('ra', 'rút', 'debit', 'withdrawal') and w['x0'] > 0.45 * W0], default=0.674 * W0)
+    x1_gui = max([w['x1'] for w in hdr_above if w['text'].lower() in ('vào', 'gửi', 'credit', 'deposit') and w['x0'] > x1_rut], default=0.805 * W0)
+    x1_du = max([w['x1'] for w in hdr_above if w['text'].lower() in ('dư', 'balance') and w['x0'] > x1_gui], default=0.935 * W0)
+
+    # Luon tinh nguong can phai (x1) thay vi x0 de khong bao gio sot so dai nhu 150.000.000
+    money_min_x1 = x1_rut - 0.05 * W0
+    mid_rut_gui = (x1_rut + x1_gui) / 2
+    mid_gui_du = (x1_gui + x1_du) / 2
 
     stt_counter = 0
     for pi, page in enumerate(pdf.pages):
         W, H = page.width, page.height
         words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+        for w in words:
+            w['text'] = unicodedata.normalize("NFC", w['text'])
+
         table_top = p0_table_top if pi == 0 else 0.015 * H
 
-        # Chan duoi trang: bo qua chu ky ACB va so trang "1 / 2"
         footer_tops = [
             w['top'] for w in words
             if (w['text'].upper() in ('NGÂN', 'ASIA') and w['x0'] > 0.50 * W)
             or (w['text'] == '/' and w['top'] > 0.90 * H)
         ]
         table_bottom = min(footer_tops) - 4 if footer_tops else H - 0.03 * H
-
         twords = [w for w in words if table_top <= w['top'] < table_bottom]
 
-        # Neo moi dong giao dich la ngay o cot 1 (x0 < 0.13 * W)
+        # Neu trang > 0, cap nhat lai ty le theo W trang hien tai neu can
+        scale = W / W0 if W0 else 1.0
+        cur_money_min_x1 = money_min_x1 * scale
+        cur_mid_rg = mid_rut_gui * scale
+        cur_mid_gd = mid_gui_du * scale
+
         raw_anchors = sorted(
             [w for w in twords if w['x0'] < 0.13 * W and _ACB_DATE_RE.match(w['text'])],
             key=lambda w: (w['top'], w['x0'])
@@ -423,8 +444,6 @@ def extract_acb(pdf):
         if not anchors:
             continue
 
-        # Tim toa do mep phai chuan cua 3 cot tien tu du lieu thuc te tren trang
-        # Cot No: x1 trong (0.58W .. 0.73W], Cot Co: (0.73W .. 0.86W], Cot SoDu: > 0.86W
         raw_shapes = [
             s for s in (list(page.rects) + list(page.curves))
             if s['width'] > 0.65 * W and 0.015 * H < s['height'] < 0.25 * H
@@ -449,11 +468,10 @@ def extract_acb(pdf):
                     y_e = (below[0]['top'] + 1) if below else table_bottom
                 row_spans.append((y_s, y_e))
         else:
-            # Cat dong theo khe ho lon nhat giua cac dong Noi dung (cot 4: 0.265W .. 0.58W)
             cuts = [table_top]
             for i in range(len(anchors) - 1):
                 y_a, y_b = anchors[i]['top'], anchors[i + 1]['top']
-                desc_w = [w for w in twords if (y_a - 2) <= w['top'] <= (y_b + 2) and 0.265 * W <= w['x0'] < 0.58 * W]
+                desc_w = [w for w in twords if (y_a - 2) <= w['top'] <= (y_b + 2) and 0.26 * W <= w['x0'] < (x1_rut * scale - 0.09 * W)]
                 y_lines = []
                 for y in sorted(set(round(w['top'], 1) for w in desc_w)):
                     if not y_lines or y - y_lines[-1] > 3.5:
@@ -482,16 +500,16 @@ def extract_acb(pdf):
                     hl_parts.append(txt)
                 elif w['x0'] < 0.215 * W:
                     gd_parts.append(txt)
-                elif w['x0'] < 0.265 * W:
-                    continue  # So GD (bo qua cho sach Dien giai)
-                elif w['x0'] > 0.57 * W and _ACB_MONEY_RE.match(txt):
-                    if w['x1'] <= 0.73 * W:
+                elif w['x0'] < 0.265 * W and re.match(r'^\d{1,6}$', txt):
+                    continue  # So GD
+                elif w['x1'] >= cur_money_min_x1 and _ACB_MONEY_RE.match(txt):
+                    if w['x1'] <= cur_mid_rg:
                         no_val = _vn_money_to_std_str(txt)
-                    elif w['x1'] <= 0.86 * W:
+                    elif w['x1'] <= cur_mid_gd:
                         co_val = _vn_money_to_std_str(txt)
                     else:
                         sodu_val = _vn_money_to_std_str(txt)
-                elif w['x0'] < 0.58 * W:
+                else:
                     mota_parts.append(txt)
 
             stt_counter += 1
@@ -769,7 +787,7 @@ def extract_excel_or_csv(path):
 
 
 # =========================================================================
-#  4. DIEU PHOI, DOI CHIEU & XUAT EXCEL CHUAN 4 COT (NGAY, NO, CO, DIEN GIAI)
+#  4. DIEU PHOI, DOI CHIEU & XUAT EXCEL CHUAN 4 COT: NGAY, NO, CO, DIEN GIAI
 # =========================================================================
 def extract_any(path, password=None):
     ext = os.path.splitext(path)[1].lower()
@@ -848,10 +866,10 @@ def make_sheet_name(file_name, used):
 
 
 def build_xlsx(file_paths, out_path, password=None):
-    """Xuat file Excel CHUAN 4 COT: Ngay, No, Co, Dien giai"""
+    """File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai"""
     FONT = "Arial"
     header_font = Font(name=FONT, bold=True, color="2C3E50", size=11)
-    header_fill = PatternFill("solid", fgColor="DCE6F7")  # Mau xanh pastel nhe
+    header_fill = PatternFill("solid", fgColor="DCE6F7")
     normal_font = Font(name=FONT, size=10)
     thin = Side(style="thin", color="D0D7E2")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -874,7 +892,6 @@ def build_xlsx(file_paths, out_path, password=None):
         name = make_sheet_name(res['source_file'], used_names)
         ws = wb.create_sheet(name)
 
-        # Dong 1: Tieu de dung 4 cot
         for c, h in enumerate(headers, start=1):
             cell = ws.cell(1, c, h)
             cell.font, cell.fill, cell.border = header_font, header_fill, border
@@ -991,7 +1008,6 @@ HTML_UI = """<!DOCTYPE html>
         }
         input:focus { border-color: #8eb0f2; }
 
-        /* HIEU UNG NUT NOI 3D PASTEL */
         .btn {
             padding: 12px 24px;
             border: none;
@@ -1091,7 +1107,7 @@ HTML_UI = """<!DOCTYPE html>
     <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
     <div class="subtitle">
         Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • File Excel tải về gồm 4 cột sạch: <b>Ngày, Nợ, Có, Diễn giải</b>.
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • File Excel tải về gồm 4 cột: <b>Ngày, Nợ, Có, Diễn giải</b>.
     </div>
 
     <div class="upload-zone" onclick="document.getElementById('files').click()">
@@ -1251,72 +1267,3 @@ function renderPreviewRows(rows) {
             <td class="text-center"><b>${r.Ngay}</b></td>
             <td class="text-right debit">${noDisp}</td>
             <td class="text-right credit">${coDisp}</td>
-            <td>${r.MoTa}</td>
-        `;
-        tbody.appendChild(tr);
-    });
-}
-</script>
-</body>
-</html>"""
-
-
-@app.route("/")
-def index():
-    return render_template_string(HTML_UI)
-
-
-@app.route("/process", methods=["POST"])
-def process_files():
-    uploaded = request.files.getlist("files")
-    pwd = request.form.get("password", "").strip() or None
-    if not uploaded:
-        return jsonify({"error": "Không có file nào được tải lên"}), 400
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        paths = []
-        for f in uploaded:
-            p = os.path.join(tmp_dir, os.path.basename(f.filename))
-            f.save(p)
-            paths.append(p)
-
-        out_xlsx = os.path.join(tmp_dir, "SaoKe_4Cot_Chuan.xlsx")
-        results = build_xlsx(paths, out_xlsx, password=pwd)
-
-        with open(out_xlsx, "rb") as f:
-            b64_data = base64.b64encode(f.read()).decode("utf-8")
-
-        summary, sheets = [], []
-        for res, warns in results:
-            hi = res.get('header_info', {})
-            t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
-            t_cred = to_num(res['total_credit']) if res.get('total_credit') else sum(to_num(x['Co']) for x in res['rows'])
-            if res.get('loi'): status = "❌ LỖI: " + res['loi']
-            elif warns: status = "⚠️ CẢNH BÁO: " + " | ".join(warns[:2])
-            else: status = "Khớp chuẩn"
-
-            summary.append({
-                "file": res['source_file'],
-                "bank": str(res['bank']).upper(),
-                "account": hi.get('account_no', ''),
-                "count": len(res['rows']),
-                "debit": f"{t_deb:,.0f}",
-                "credit": f"{t_cred:,.0f}",
-                "status": status
-            })
-
-            sheets.append({
-                "file": res['source_file'],
-                "bank": str(res['bank']).upper(),
-                "account": hi.get('account_no', ''),
-                "rows": res['rows']
-            })
-
-    return jsonify({"summary": summary, "sheets": sheets, "file_b64": b64_data})
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    if not os.environ.get("RENDER") and not os.environ.get("PYTHONANYWHERE_DOMAIN"):
-        Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    app.run(host="0.0.0.0", port=port)
