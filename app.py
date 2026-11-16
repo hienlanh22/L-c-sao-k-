@@ -1,22 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 CONG CU TRICH XUAT SAO KE NGAN HANG
-- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (giu nguyen thuat toan tu TrichXuatSaoKe 4)
+- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB, MBBank
 - HTML: VPBank (T24 Core)
-- Excel / CSV: Sacombank, Agribank IPCAS, Excel khac
+- Excel/CSV: Sacombank, Agribank IPCAS, Excel khac
 - Dinh dang ngay: dd/mm/yyyy
-- File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai
+- Ket xuat 4 cot & Ket xuat cho ASP (1111, 6422, 131, 331, 515)
+- Ho tro nap & luu Danh sach Khach hang / Nha cung cap theo tung cong ty de ghep Ma doi tuong chuan xac.
 """
-import base64
 import csv
 from html.parser import HTMLParser
+import io
+import json
 import os
 import re
 import tempfile
+import unicodedata
 import webbrowser
 from threading import Timer
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -29,12 +32,20 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 
 # =========================================================================
-#  1. CHUAN HOA NGAY (dd/mm/yyyy) & TIEN TE
+#  1. CHUAN HOA NGAY (dd/mm/yyyy), BO DAU TIENG VIET & TIEN TE
 # =========================================================================
 _ENG_MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12
 }
+
+def strip_accents(s):
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFD", str(s))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = s.replace("đ", "d").replace("Đ", "D")
+    return unicodedata.normalize("NFC", s)
 
 def normalize_date_ddmmyyyy(val):
     if not val:
@@ -107,7 +118,7 @@ def _vn_money_to_std_str(val):
 
 
 # =========================================================================
-#  2. NHAN DIEN NGAN HANG TU NOI DUNG FILE PDF (Giu nguyen code 4)
+#  2. NHAN DIEN NGAN HANG TU NOI DUNG FILE PDF
 # =========================================================================
 def detect_bank(text):
     t = text or ""
@@ -119,6 +130,8 @@ def detect_bank(text):
         return "bidv"
     if "LPBank" in t or "Loc Phat Viet Nam" in t or "Lộc Phát Việt Nam" in t:
         return "lpbank"
+    if "NGÂN HÀNG TMCP QUÂN ĐỘI" in t or "Military Commercial Joint Stock Bank" in t or "MBBank's System" in t:
+        return "mbbank"
     return "unknown"
 
 
@@ -151,6 +164,8 @@ def extract_vietinbank(pdf):
             if "Số dư đầu kỳ" in line:
                 m = re.search(r'([\d,]+)\s*$', line)
                 if m: beginning_balance = m.group(1)
+            if "Dear Customer:" in line and not header_info.get('customer'):
+                header_info['customer'] = line.split("Dear Customer:", 1)[1].strip()
             if "Tài khoản số:" in line:
                 m = re.search(r'Tài khoản số:\s*(\S+)', line)
                 if m: header_info['account_no'] = m.group(1)
@@ -206,6 +221,8 @@ def extract_vietinbank(pdf):
                 'No': txt("No"),
                 'Co': txt("Co"),
                 'SoDu': txt("SoDu"),
+                'DoiTac': txt("DoiTac"),
+                'MaGD': txt("SoGD"),
             })
 
     return {
@@ -225,7 +242,13 @@ def extract_bidv(pdf):
     first_page_text = pdf.pages[0].extract_text() or ""
     for line in first_page_text.split("\n"):
         line = line.strip()
-        if line.startswith("Số tài khoản/"):
+        if line.startswith("Khách hàng/"):
+            m = re.search(r'Customer:\s*(.*?)(?:\s+Địa chỉ|$)', line)
+            if m: header_info['customer'] = m.group(1).strip()
+        elif line.startswith("Tên tài khoản/") and not header_info.get('customer'):
+            m = re.search(r'Account name:\s*(.*?)(?:\s+Loại tiền|$)', line)
+            if m: header_info['customer'] = m.group(1).strip()
+        elif line.startswith("Số tài khoản/"):
             m = re.search(r'Account No:\s*(\S+)', line)
             if m: header_info['account_no'] = m.group(1)
 
@@ -240,14 +263,14 @@ def extract_bidv(pdf):
                 if "STT" in label and "No" in label: continue
                 if "Số dư đầu kỳ" in label or "Opening balance" in label:
                     val = next((c for c in row[1:] if c not in (None, "")), None)
-                    if val: beginning_balance = val
+                    if val: beginning_balance = val.replace("\n", "")
                     continue
                 if "Cộng phát sinh" in label or "Total Amount" in label:
-                    nums = [c for c in row[1:] if c not in (None, "")]
+                    nums = [c.replace("\n", "") for c in row[1:] if c not in (None, "")]
                     if len(nums) >= 2: total_debit, total_credit = nums[0], nums[1]
                     continue
                 if "Số dư cuối kỳ" in label or "Closing balance" in label:
-                    nums = [c for c in row[1:] if c not in (None, "")]
+                    nums = [c.replace("\n", "") for c in row[1:] if c not in (None, "")]
                     if nums: ending_balance = nums[-1] if len(nums) == 1 else nums[0]
                     continue
                 if len(row) < 11: continue
@@ -258,9 +281,11 @@ def extract_bidv(pdf):
                     'STT': stt,
                     'Ngay': normalize_date_ddmmyyyy((row[1] or "").replace("\n", " ").strip()),
                     'MoTa': (row[10] or "").replace("\n", " ").strip(),
-                    'No': row[4] or "0",
-                    'Co': row[5] or "0",
-                    'SoDu': row[6] or "",
+                    'No': (row[4] or "0").replace("\n", ""),
+                    'Co': (row[5] or "0").replace("\n", ""),
+                    'SoDu': (row[6] or "").replace("\n", ""),
+                    'DoiTac': "",
+                    'MaGD': (row[3] or "").replace("\n", "").strip(),
                 })
 
     return {
@@ -271,7 +296,7 @@ def extract_bidv(pdf):
 
 
 # =========================================================================
-#  3C. LPBANK PDF (7 cot moi & 10 cot cu + ghep dong qua trang)
+#  3C. LPBANK PDF (7 cot moi & 10 cot cu)
 # =========================================================================
 def _clean_lpb(v):
     if not isinstance(v, str) or not v:
@@ -288,7 +313,12 @@ def extract_lpbank(pdf):
     first_page_text = pdf.pages[0].extract_text() or ""
     for line in first_page_text.split("\n"):
         line = line.strip()
-        if line.startswith("Số tài khoản:"):
+        if line.startswith("Tên tài khoản:") and not header_info.get('customer'):
+            m = re.search(r'Tên tài khoản:\s*(.*?)(?:\s+Mã khách hàng|$)', line)
+            if m: header_info['customer'] = m.group(1).strip()
+        elif line.startswith("Tên khách hàng:"):
+            header_info['customer'] = line.split(":", 1)[1].strip()
+        elif line.startswith("Số tài khoản:"):
             m = re.search(r'Số tài khoản:\s*(\S+)', line)
             if m: header_info['account_no'] = m.group(1)
 
@@ -324,8 +354,10 @@ def extract_lpbank(pdf):
                 stt_counter += 1
                 if len(row) >= 10:
                     no_val, co_val, sodu_val = row[7] or "0", row[8] or "0", row[9]
+                    doi_tac, ma_gd = row[4], row[6]
                 else:
                     no_val, co_val, sodu_val = row[4] or "0", row[5] or "0", row[6]
+                    doi_tac, ma_gd = "", row[3]
 
                 all_rows.append({
                     'STT': str(stt_counter),
@@ -334,6 +366,8 @@ def extract_lpbank(pdf):
                     'No': no_val,
                     'Co': co_val,
                     'SoDu': sodu_val,
+                    'DoiTac': doi_tac,
+                    'MaGD': ma_gd,
                 })
 
     return {
@@ -344,46 +378,34 @@ def extract_lpbank(pdf):
 
 
 # =========================================================================
-#  3D. ACB PDF (LAY NGUYEN BAN TU FILE TrichXuatSaoKe (4).py)
+#  3D. ACB PDF (GIU NGUYEN TU TrichXuatSaoKe (4).py)
 # =========================================================================
 ACB_NGAY_CHINH = "hieu_luc"
-
 _ACB_DEFAULT_EDGES = [36.0, 83.4, 139.6, 164.3, 322.7, 401.5, 480.2, 559.0]
 _ACB_DATE_RE = re.compile(r'\d{2}/\d{2}/\d{4}')
 _ACB_NUM_RE = r'(-?[\d.,]+)'
 
-
 def _acb_amount(s):
-    """'25.920.000' -> '25920000' ; '1.234,56' -> '1234.56' ; '' -> ''."""
     s = (s or "").strip().replace(" ", "")
-    if not s:
-        return ""
+    if not s: return ""
     neg = s.startswith("-") or (s.startswith("(") and s.endswith(")"))
     s = s.strip("-()")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", "") if re.fullmatch(r'\d{1,3}(,\d{3})+', s) else s.replace(",", ".")
-    elif "." in s and re.fullmatch(r'\d{1,3}(\.\d{3})+', s):
-        s = s.replace(".", "")
+    if "," in s and "." in s: s = s.replace(".", "").replace(",", ".")
+    elif "," in s: s = s.replace(",", "") if re.fullmatch(r'\d{1,3}(,\d{3})+', s) else s.replace(",", ".")
+    elif "." in s and re.fullmatch(r'\d{1,3}(\.\d{3})+', s): s = s.replace(".", "")
     return ("-" if neg else "") + s
-
 
 def _acb_is_header_fill(r):
     c = r.get('non_stroking_color')
     try:
-        return c is not None and len(c) == 3 and abs(c[0] - 0.722) < 0.03 \
-            and abs(c[1] - 0.914) < 0.03 and abs(c[2] - 1.0) < 0.03
+        return c is not None and len(c) == 3 and abs(c[0] - 0.722) < 0.03 and abs(c[1] - 0.914) < 0.03 and abs(c[2] - 1.0) < 0.03
     except TypeError:
         return False
 
-
 def _acb_layout(page, words):
-    """Tra ve (canh cac cot, dong bat dau bang giao dich) cua 1 trang."""
     groups = {}
     for r in page.rects:
-        if _acb_is_header_fill(r):
-            groups.setdefault(round(r['top']), []).append(r)
+        if _acb_is_header_fill(r): groups.setdefault(round(r['top']), []).append(r)
     if groups:
         grp = max(groups.values(), key=len)
         if len(grp) == 7:
@@ -391,7 +413,6 @@ def _acb_layout(page, words):
             return xs + [max(r['x1'] for r in grp)], max(r['bottom'] for r in grp)
     ghi = [w['top'] for w in words if w['text'] == 'Ghi' and 330 < (w['x0'] + w['x1']) / 2 < 410]
     return list(_ACB_DEFAULT_EDGES), (min(ghi) + 14 if ghi else 0.0)
-
 
 def _acb_row_bounds(tops, anchors, thr=11.7):
     tops = sorted(set(tops))
@@ -405,128 +426,88 @@ def _acb_row_bounds(tops, anchors, thr=11.7):
             cuts.append((a + b) / 2)
     top_edge = anchors[0]
     for t in sorted((t for t in tops if t < anchors[0] - 1.0), reverse=True):
-        if top_edge - t > thr:
-            break
+        if top_edge - t > thr: break
         top_edge = t
     bot_edge = anchors[-1]
     for t in sorted(t for t in tops if t > anchors[-1] + 1.0):
-        if t - bot_edge > thr:
-            break
+        if t - bot_edge > thr: break
         bot_edge = t
     edges = [top_edge - 1.0] + cuts + [bot_edge + 1.0]
     return list(zip(edges[:-1], edges[1:]))
 
-
 def _acb_page_rows(page):
     words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
     edges, table_top = _acb_layout(page, words)
-
     def col_of(w):
         c = (w['x0'] + w['x1']) / 2
         for i in range(7):
-            if edges[i] <= c < edges[i + 1]:
-                return i
+            if edges[i] <= c < edges[i + 1]: return i
         return None
-
     cand = [(w, col_of(w)) for w in words if w['top'] >= table_top]
     cand = [(w, c) for w, c in cand if c is not None]
     anchors = sorted(w['top'] for w, c in cand if c == 2 and re.fullmatch(r'\d+', w['text']))
-    if not anchors:
-        return []
+    if not anchors: return []
     bounds = _acb_row_bounds([w['top'] for w, _ in cand], anchors)
 
     rows = []
     for (lo, hi) in bounds:
         cells = {i: [] for i in range(7)}
         for w, c in cand:
-            if lo < w['top'] <= hi:
-                cells[c].append(w)
-
+            if lo < w['top'] <= hi: cells[c].append(w)
         def txt(i):
             ws = sorted(cells[i], key=lambda w: (round(w['top']), w['x0']))
             return " ".join(w['text'] for w in ws).strip()
-
         sogd = next((w['text'] for w in cells[2] if re.fullmatch(r'\d+', w['text'])), "")
         m0 = _ACB_DATE_RE.search(txt(0))
         rows.append({
-            'hieu_luc': m0.group(0) if m0 else txt(0),
-            'giao_dich': txt(1),
-            'so_gd': sogd,
-            'noi_dung': txt(3),
-            'no': _acb_amount(txt(4)),
-            'co': _acb_amount(txt(5)),
-            'so_du': _acb_amount(txt(6)),
+            'hieu_luc': m0.group(0) if m0 else txt(0), 'giao_dich': txt(1), 'so_gd': sogd,
+            'noi_dung': txt(3), 'no': _acb_amount(txt(4)), 'co': _acb_amount(txt(5)), 'so_du': _acb_amount(txt(6)),
         })
     return rows
-
 
 def _acb_header(page):
     info = {}
     text = page.extract_text() or ""
-
     m = re.search(r'Thời gian sao kê\s*(\d{2}/\d{2}/\d{4})\s*-\s*(\d{2}/\d{2}/\d{4})', text)
-    if m:
-        info['period'] = f"Tu {m.group(1)} den {m.group(2)}"
+    if m: info['period'] = f"Tu {m.group(1)} den {m.group(2)}"
     for key, pat in (('beginning', r'Số dư đầu\s+'), ('total_debit', r'Tổng tiền rút ra\s+'),
                      ('total_credit', r'Tổng tiền gửi vào\s+'), ('ending', r'Số dư cuối\s+')):
         mm = re.search(pat + _ACB_NUM_RE, text)
-        if mm:
-            info[key] = _acb_amount(mm.group(1))
-
+        if mm: info[key] = _acb_amount(mm.group(1))
     words = page.extract_words()
     left = [w for w in words if w['x1'] < 145 and 150 < w['top'] < 340]
     line_tops = sorted({round(w['top'], 1) for w in left})
     labels = {}
     for t in line_tops:
-        s = " ".join(w['text'] for w in sorted((w for w in left if abs(w['top'] - t) < 1.5),
-                                               key=lambda w: w['x0']))
-        key = ('name' if s.startswith('Chủ') else 'acc' if s.startswith('Số tài khoản')
-               else 'mst' if (s.startswith('Mã số thuế') or s.startswith('Giấy'))
-               else 'addr' if s.startswith('Địa') else None)
-        if key:
-            labels.setdefault(key, []).append(t)
-            if key == 'acc':
-                cm = re.search(r'\((\w{3})\)', s)
-                if cm:
-                    info['currency'] = cm.group(1)
+        s = " ".join(w['text'] for w in sorted((w for w in left if abs(w['top'] - t) < 1.5), key=lambda w: w['x0']))
+        key = ('name' if s.startswith('Chủ') else 'acc' if s.startswith('Số tài khoản') else None)
+        if key: labels.setdefault(key, []).append(t)
     if labels:
         centers = {k: sum(v) / len(v) for k, v in labels.items()}
-        lo = min(min(v) for v in labels.values()) - 12
-        hi = max(max(v) for v in labels.values()) + 12
+        lo, hi = min(min(v) for v in labels.values()) - 12, max(max(v) for v in labels.values()) + 12
         vals = [w for w in words if 150 <= w['x0'] < 352 and lo <= w['top'] <= hi]
         got = {}
         for t in sorted({round(w['top'], 1) for w in vals}):
-            s = " ".join(w['text'] for w in sorted((w for w in vals if abs(w['top'] - t) < 1.5),
-                                                   key=lambda w: w['x0']))
+            s = " ".join(w['text'] for w in sorted((w for w in vals if abs(w['top'] - t) < 1.5), key=lambda w: w['x0']))
             k = min(centers, key=lambda kk: abs(centers[kk] - t))
             got.setdefault(k, []).append(s)
         info['customer'] = " ".join(got.get('name', []))
         info['account_no'] = " ".join(got.get('acc', []))
-        info['tax_code'] = " ".join(got.get('mst', []))
-        info['address'] = " ".join(got.get('addr', []))
     return info
-
 
 def extract_acb(pdf):
     hdr = _acb_header(pdf.pages[0])
-    header_info = {k: hdr[k] for k in ('period', 'currency', 'customer', 'account_no', 'tax_code', 'address')
-                   if hdr.get(k)}
-    header_info['bank'] = "ACB (Ngan hang TMCP A Chau)"
-
+    header_info = {k: hdr[k] for k in ('period', 'customer', 'account_no') if hdr.get(k)}
     all_rows = []
     for page in pdf.pages:
         for r in _acb_page_rows(page):
             stt = len(all_rows) + 1
             ngay_chinh = r['hieu_luc'] if ACB_NGAY_CHINH == "hieu_luc" else r['giao_dich']
             all_rows.append({
-                'STT': str(stt),
-                'Ngay': normalize_date_ddmmyyyy(ngay_chinh),
-                'MoTa': r['noi_dung'],
-                'No': r['no'] or "0",
-                'Co': r['co'] or "0",
-                'SoDu': r['so_du'],
+                'STT': str(stt), 'Ngay': normalize_date_ddmmyyyy(ngay_chinh), 'MoTa': r['noi_dung'],
+                'No': r['no'] or "0", 'Co': r['co'] or "0", 'SoDu': r['so_du'],
+                'DoiTac': "", 'MaGD': r['so_gd'],
             })
-
     return {
         'header_info': header_info, 'rows': all_rows,
         'beginning_balance': hdr.get('beginning'), 'ending_balance': hdr.get('ending'),
@@ -535,7 +516,65 @@ def extract_acb(pdf):
 
 
 # =========================================================================
-#  3E. VPBANK HTML
+#  3E. MBBANK PDF
+# =========================================================================
+def extract_mbbank(pdf):
+    header_info, all_rows = {}, []
+    beginning_balance = ending_balance = total_debit = total_credit = None
+
+    p0_text = pdf.pages[0].extract_text() or ""
+    for line in p0_text.split("\n"):
+        line = line.strip()
+        if "Customer name:" in line:
+            header_info['customer'] = line.split("Customer name:", 1)[1].strip()
+        elif "Account No:" in line:
+            m = re.search(r'Account No:\s*(\S+)', line)
+            if m: header_info['account_no'] = m.group(1)
+        elif "Opening Balance:" in line:
+            m = re.search(r'Opening Balance:\s*([\d,]+)', line)
+            if m: beginning_balance = m.group(1)
+
+    last_text = pdf.pages[-1].extract_text() or ""
+    for line in last_text.split("\n"):
+        if "Closing Balance:" in line:
+            m = re.search(r'Closing Balance:\s*([\d,]+)', line)
+            if m: ending_balance = m.group(1)
+
+    for page in pdf.pages:
+        for table in page.extract_tables():
+            for row in table:
+                row = [re.sub(r'\s+', ' ', (c or "").replace("\n", " ")).strip() for c in row]
+                if len(row) < 9:
+                    continue
+                if "TỔNG TIỀN" in row[1] or "TỔNG TIỀN" in row[2]:
+                    total_debit, total_credit = row[3] or None, row[4] or None
+                    continue
+                if not row[0] or not row[0].isdigit():
+                    continue
+                all_rows.append({
+                    'STT': row[0],
+                    'Ngay': normalize_date_ddmmyyyy(row[1] or row[2]),
+                    'MoTa': row[7],
+                    'No': row[3] or "0",
+                    'Co': row[4] or "0",
+                    'SoDu': row[5],
+                    'DoiTac': row[6],
+                    'MaGD': row[8],
+                })
+
+    all_rows.reverse()
+    for i, r in enumerate(all_rows, start=1):
+        r['STT'] = str(i)
+
+    return {
+        'header_info': header_info, 'rows': all_rows,
+        'beginning_balance': beginning_balance, 'ending_balance': ending_balance,
+        'total_debit': total_debit, 'total_credit': total_credit,
+    }
+
+
+# =========================================================================
+#  3F. VPBANK HTML
 # =========================================================================
 _VPB_DATE_RE = re.compile(r'^(\d{1,2}) ([A-Za-z]{3}) (\d{2,4})$')
 
@@ -544,17 +583,14 @@ class _TableParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.title, self.tables, self._stack = "", [], []
         self._row, self._cell, self._in_title = None, None, False
-
     def _close_cell(self):
         if self._cell is not None and self._row is not None:
             self._row.append(re.sub(r'\s+', ' ', "".join(self._cell).replace("\xa0", " ")).strip())
         self._cell = None
-
     def _close_row(self):
         self._close_cell()
         if self._row is not None and self._stack: self._stack[-1].append(self._row)
         self._row = None
-
     def handle_starttag(self, tag, attrs):
         if tag == "title": self._in_title = True
         elif tag == "table": self._close_row(); self._stack.append([])
@@ -563,7 +599,6 @@ class _TableParser(HTMLParser):
             self._close_cell()
             if self._row is None: self._row = []
             self._cell = []
-
     def handle_endtag(self, tag):
         if tag == "title": self._in_title = False
         elif tag in ("td", "th"): self._close_cell()
@@ -571,7 +606,6 @@ class _TableParser(HTMLParser):
         elif tag == "table":
             self._close_row()
             if self._stack: self.tables.append(self._stack.pop())
-
     def handle_data(self, data):
         if self._in_title: self.title += data
         if self._cell is not None: self._cell.append(data)
@@ -586,13 +620,14 @@ def _read_text_file(path):
 def extract_vpbank_html(parser):
     header_info, all_rows = {}, []
     beginning_balance = ending_balance = total_debit = total_credit = None
-
     for table in parser.tables:
         for row in table:
             if not row: continue
             label = row[0].upper()
             if label == "NR." or (len(row) >= 3 and row[0].upper().startswith("STATEMENT")):
                 header_info['account_no'] = row[-1]
+            elif label == "CUSTOMER":
+                header_info['customer'] = row[2] if len(row) > 2 else ""
             elif label.startswith("BALANCE AT PERIOD START") and len(row) > 1:
                 beginning_balance = row[1]
 
@@ -606,7 +641,6 @@ def extract_vpbank_html(parser):
                     if nme and nme not in col: col[nme] = j
                 break
         if data_table is not None: break
-
     if data_table is None:
         raise ValueError("Khong tim thay bang giao dich VPBank")
 
@@ -621,12 +655,12 @@ def extract_vpbank_html(parser):
         if _VPB_DATE_RE.match(val_date or ""):
             stt += 1
             all_rows.append({
-                'STT': str(stt),
-                'Ngay': normalize_date_ddmmyyyy(val_date),
+                'STT': str(stt), 'Ngay': normalize_date_ddmmyyyy(val_date),
                 'MoTa': get(row, "NARR") or pdesc,
                 'No': (get(row, "PDAMT") or "0").strip().lstrip("-").strip() or "0",
                 'Co': (get(row, "PCAMT") or "0").strip().lstrip("-").strip() or "0",
                 'SoDu': get(row, "BOOKED BALANCE"),
+                'DoiTac': "", 'MaGD': pdesc,
             })
         elif "TOTAL MOVEMENT" in (pdesc or "").upper():
             total_debit = (get(row, "PDAMT") or "").strip().lstrip("-").strip() or None
@@ -634,7 +668,6 @@ def extract_vpbank_html(parser):
         elif any(c.upper().startswith("BALANCE AT PERIOD END") for c in row):
             nums = [c for c in row if re.match(r'^-?[\d,]+(\.\d+)?$', c)]
             if nums: ending_balance = nums[0]
-
     return {'header_info': header_info, 'rows': all_rows, 'beginning_balance': beginning_balance, 'ending_balance': ending_balance, 'total_debit': total_debit, 'total_credit': total_credit}
 
 def extract_html(path):
@@ -650,7 +683,7 @@ def extract_html(path):
 
 
 # =========================================================================
-#  3F. EXCEL / CSV (SACOMBANK + AGRIBANK + CHUNG)
+#  3G. EXCEL / CSV (SACOMBANK + AGRIBANK + CHUNG + DANH SACH KH/NCC)
 # =========================================================================
 def _read_tabular_light(path):
     with open(path, "rb") as f:
@@ -677,14 +710,61 @@ def _read_tabular_light(path):
                     rv.append(str(cell.value))
             rows.append(rv)
         return rows
-
     for enc in ("utf-8-sig", "utf-8", "cp1258", "latin-1"):
         try:
             with open(path, "r", encoding=enc, newline="") as f:
                 return list(csv.reader(f))
-        except Exception:
-            continue
+        except Exception: continue
     return []
+
+
+def parse_partner_excel(path):
+    """Doc file Danh sach khach hang / Danh sach nha cung cap (.xlsx, .xls, .csv)"""
+    rows = _read_tabular_light(path)
+    if not rows:
+        raise ValueError("File danh sách trống hoặc không đọc được")
+
+    header_idx = -1
+    code_col = name_col = mst_col = -1
+
+    for i, r in enumerate(rows[:15]):
+        norm_cells = [strip_accents(str(c)).lower().strip() for c in r]
+        c_idx = next((idx for idx, v in enumerate(norm_cells) if any(k in v for k in (
+            "ma khach hang", "ma nha cung cap", "ma doi tuong", "ma kh", "ma ncc", "ma dt"
+        )) or v == "ma" or v == "code"), -1)
+        n_idx = next((idx for idx, v in enumerate(norm_cells) if any(k in v for k in (
+            "ten khach hang", "ten nha cung cap", "ten doi tuong", "ten kh", "ten ncc", "ten dt"
+        )) or v == "ten" or v == "name"), -1)
+
+        if c_idx != -1 and n_idx != -1:
+            header_idx = i
+            code_col, name_col = c_idx, n_idx
+            mst_col = next((idx for idx, v in enumerate(norm_cells) if "ma so thue" in v or v == "mst"), -1)
+            break
+
+    if header_idx == -1:
+        raise ValueError("Không tìm thấy cột 'Mã khách hàng/NCC' và 'Tên khách hàng/NCC' trong file!")
+
+    items = []
+    seen_codes = set()
+    for r in rows[header_idx + 1:]:
+        if len(r) <= max(code_col, name_col):
+            continue
+        code = str(r[code_col]).strip()
+        name = str(r[name_col]).strip()
+        mst = str(r[mst_col]).strip() if (mst_col != -1 and mst_col < len(r)) else ""
+        if not code or not name:
+            continue
+        if strip_accents(code).lower() in ("tong", "total", "cong"):
+            continue
+        # Bo qua neu trung lap hoan toan
+        key = (code.lower(), name.lower())
+        if key in seen_codes:
+            continue
+        seen_codes.add(key)
+        items.append({"code": code, "name": name, "mst": mst})
+
+    return items
 
 
 def extract_excel_or_csv(path):
@@ -692,7 +772,6 @@ def extract_excel_or_csv(path):
     if not rows:
         raise ValueError("File Excel/CSV rong hoac khong doc duoc")
 
-    # 1. AGRIBANK IPCAS
     header_idx = -1
     for i, r in enumerate(rows[:6]):
         lower = [str(c).replace("\ufeff", "").strip().lower() for c in r]
@@ -704,7 +783,6 @@ def extract_excel_or_csv(path):
         col = {str(c).replace("\ufeff", "").strip().lower(): idx for idx, c in enumerate(rows[header_idx])}
         header_info, all_rows, stt = {}, [], 0
         beg_bal = end_bal = None
-
         for r in rows[header_idx + 1:]:
             if not any(r): continue
             d_val = normalize_date_ddmmyyyy(r[col['trdt']])
@@ -718,12 +796,13 @@ def extract_excel_or_csv(path):
             if stt == 1 and 'bftrbal' in col: beg_bal = str(r[col['bftrbal']]).strip()
             end_bal = bal
             if not header_info.get('account_no') and 'idxactno' in col: header_info['account_no'] = str(r[col['idxactno']]).strip()
+            if not header_info.get('customer') and 'name_4' in col: header_info['customer'] = str(r[col['name_4']]).strip()
 
             all_rows.append({
                 'STT': str(stt), 'Ngay': d_val, 'MoTa': desc,
-                'No': f"{abs(amt):,.0f}" if amt < 0 else "0",
-                'Co': f"{amt:,.0f}" if amt > 0 else "0",
+                'No': f"{abs(amt):,.0f}" if amt < 0 else "0", 'Co': f"{amt:,.0f}" if amt > 0 else "0",
                 'SoDu': f"{to_num(bal):,.0f}" if bal else "",
+                'DoiTac': "", 'MaGD': str(r[col.get('trcd', 0)]) if 'trcd' in col else "",
             })
         if all_rows:
             return {'bank': 'agribank', 'header_info': header_info, 'rows': all_rows,
@@ -731,32 +810,24 @@ def extract_excel_or_csv(path):
                     'ending_balance': f"{to_num(end_bal):,.0f}" if end_bal else None,
                     'total_debit': None, 'total_credit': None}
 
-    # 2. SACOMBANK
     vnd_rows = [r for r in rows if "VND" in [str(c).strip() for c in r]]
     if len(vnd_rows) >= 2:
         header_info, all_rows, stt = {}, [], 0
         for r in rows[:25]:
             line = " ".join(str(c) for c in r)
             m = re.search(r'(?:Số|Tài khoản):\s*([0-9A-Za-z]+)', line)
-            if m and not header_info.get('account_no'):
-                header_info['account_no'] = m.group(1)
-
+            if m and not header_info.get('account_no'): header_info['account_no'] = m.group(1)
         for r in vnd_rows:
             r_str = [str(c).strip() for c in r]
             v_idx = r_str.index("VND")
             desc = r_str[v_idx - 1] if v_idx > 0 else ""
-
-            if "Loại tiền" in desc or "Loại tiền" in " ".join(r_str[:v_idx]):
-                continue
-
+            if "Loại tiền" in desc or "Loại tiền" in " ".join(r_str[:v_idx]): continue
             d_val = ""
             for v in r_str[:v_idx]:
                 if re.search(r'\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', v):
                     d_val = normalize_date_ddmmyyyy(v)
                     break
-            if not d_val:
-                continue
-
+            if not d_val: continue
             no_str, co_str = "0", "0"
             for j in range(v_idx + 1, len(r_str)):
                 val = r_str[j]
@@ -765,14 +836,12 @@ def extract_excel_or_csv(path):
                     if std_val != "0":
                         if j - v_idx <= 4: no_str = std_val
                         else: co_str = std_val
-
             if no_str != "0" or co_str != "0" or desc:
                 stt += 1
-                all_rows.append({'STT': str(stt), 'Ngay': d_val, 'MoTa': desc, 'No': no_str, 'Co': co_str, 'SoDu': ""})
+                all_rows.append({'STT': str(stt), 'Ngay': d_val, 'MoTa': desc, 'No': no_str, 'Co': co_str, 'SoDu': "", 'DoiTac': "", 'MaGD': ""})
         if all_rows:
             return {'bank': 'sacombank', 'header_info': header_info, 'rows': all_rows, 'beginning_balance': None, 'ending_balance': None, 'total_debit': None, 'total_credit': None}
 
-    # 3. EXCEL / CSV CHUNG
     all_rows, stt = [], 0
     for r in rows:
         r_str = [str(x).strip() for x in r]
@@ -782,13 +851,311 @@ def extract_excel_or_csv(path):
         texts = [x for x in r_str if len(x) > 5 and not _is_money_token(x) and not re.match(r'^(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})', x)]
         if nums or texts:
             stt += 1
-            all_rows.append({'STT': str(stt), 'Ngay': d_val, 'MoTa': texts[0] if texts else "", 'No': nums[0] if nums else "0", 'Co': nums[1] if len(nums) > 1 else "0", 'SoDu': ""})
-
+            all_rows.append({'STT': str(stt), 'Ngay': d_val, 'MoTa': texts[0] if texts else "", 'No': nums[0] if nums else "0", 'Co': nums[1] if len(nums) > 1 else "0", 'SoDu': "", 'DoiTac': "", 'MaGD': ""})
     return {'bank': 'excel_khac', 'header_info': {}, 'rows': all_rows, 'beginning_balance': None, 'ending_balance': None, 'total_debit': None, 'total_credit': None}
 
 
 # =========================================================================
-#  4. DIEU PHOI, DOI CHIEU & XUAT EXCEL CHUAN 4 COT: NGAY, NO, CO, DIEN GIAI
+#  4. BO NHAN DIEN TAI KHOAN DOI UNG & GHEP MA DOI TUONG TU DANH BA + TU DIEN
+# =========================================================================
+_PARTNER_ALIASES = [
+    ("loc hoang", "lochoang"), ("lan hien", "lanhien"), ("thinh hien", "thinhhien"),
+    ("thuy khanh", "thuykhanh"), ("thanh anh", "thanhanh"), ("minh huy", "minhhuy"),
+    ("le trung", "letrung"), ("hung long", "hunglong"), ("thanh phat", "thanhphat"),
+    ("duc long ha anh", "duclonghaanh"), ("minh quang", "minhquang"),
+    ("hoa lu", "hoalu"), ("hung phat", "hungphat"), ("thang loan", "thangloan"),
+    ("thai hung", "thaihung"), ("trung kien", "trungkien"), ("viet nhat", "vietnhat"),
+    ("viet xo", "vietxo"), ("toan hung", "toanhung"), ("hau phat", "hauphat"),
+    ("thanh dat", "thanhdat"), ("ngoi sao viet", "ngoisaoviet"), ("thep nam a", "thepnama"),
+    ("bim son", "bimson"), ("duc duy", "ducduy"), ("thanh nam", "thanhnam"),
+    ("quang na", "quangna"), ("tan hong ha", "tanhongha"), ("xuan hung", "xuanhung"),
+    ("sang phuong", "sangphuong"), ("hoa sen home", "hoasenhome"), ("hoa binh", "hoabinh"),
+    ("anh kien", "anhkien"), ("ba ky", "baky"), ("duc linh", "duclinh"),
+    ("viet y", "viety"), ("huihuang", "huihuang"), ("thien son", "thienson"),
+    ("nam duy", "namduy"), ("dong a", "donga"), ("ha anh", "haanh"),
+    ("hancom", "hancom"), ("vuong thin", "vuongthin"), ("an phu", "anphu"),
+    ("thinh cuong", "thinhcuong"), ("thanh bac", "thanhbac"), ("tue hoa", "tuehoa"),
+    ("hung hien", "hunghien"), ("xd 226", "xd226"), ("226 ha nam", "xd226"),
+    ("doan tue", "doantue"), ("minh nhat", "minhnhat"), ("3f viet", "3fviet"),
+    ("vina agri", "dhvinaagri"), ("mavin", "mavin"), ("sunjin", "sunjin"),
+    ("mind group", "mindgroup"), ("tap doan 68", "tapdoan68"), ("manh dat", "manhdat"),
+    ("ly ha thanh", "lyhathanh"), ("phuc thanh", "phucthanh"), ("phu thanh an", "phuthanhan"),
+    ("hong ha", "hongha"), ("long truong giang", "longtruonggiang"), ("bao khang", "baokhang"),
+    ("tan sang", "tansang"), ("hung thinh", "hungthinh"), ("quan anh", "quananh"),
+    ("hoang long", "hoanglong"), ("maresti", "maresti"), ("tacovi", "tacovi"),
+    ("phuong trang", "phuongtrang"), ("trung tuyet", "trungtuyet"), ("bui minh", "buiminh"),
+    ("mai linh", "mailinh"), ("eco home", "ecohome"), ("hung hai", "hunghai"),
+    ("thai son", "thaison"), ("quang huong", "quanghuong"), ("kim thanh", "kimthanh"),
+    ("viet phap", "vietphap"), ("nam phat", "namphat"), ("pharaon", "pharaon"),
+    ("hoa phat", "hoaphat"), ("sinotruk", "sinotruknhuy"), ("gia bao chau", "giabaochau"),
+    ("khanh hung", "khanhhung"), ("hai long", "hailong"), ("huyen linh", "huyenlinh"),
+    ("huyen anh", "huyenanh"), ("an binh", "anbinh"), ("ben vung ly nhan", "benvunglynhan"),
+    ("minh khoa", "minhkhoa"), ("ngoc bien", "ngocbien"), ("y thuy", "ythuy"),
+    ("thang hang", "thanghang"), ("cpcknn ly nhan", "cokhilynhan"), ("co khi nn ly nhan", "cokhilynhan"),
+    ("co khi nong nghiep ly nhan", "cokhilynhan"), ("nam thanh", "namthanh"),
+    ("kyoto", "kyoto"), ("haka", "haka"), ("phuc chau", "phucchau"),
+    ("kiotviet", "kiotviet"), ("tung ngoc", "tungngoc"), ("motell", "motell"),
+    ("hoa phat auto", "hoaphatauto"), ("dien luc ly nhan", "dienluclynhan"),
+    ("trung tam dang kiem", "ttdangkiem"), ("phat trien quy dat", "ptquydat"),
+    ("khang duy", "khangduy"), ("toan gia phat", "toangiaphat"), ("thien hoa an", "thienhoaan"),
+    ("atc", "atc"), ("mega", "mega")
+]
+
+_STOP_WORDS_NAME = {
+    "cong", "ty", "cty", "tnhh", "cp", "co", "phan", "mtv", "tm", "dv", "sx", "xd",
+    "tmdv", "tmxd", "dvtm", "xnk", "va", "cn", "chi", "nhanh", "hcm", "hn", "ha", "nam",
+    "ninh", "binh", "viet", "nam", "trach", "nhiem", "huu", "han", "thuong", "mai", "dich",
+    "vu", "san", "xuat", "xay", "dung", "van", "tai", "dau", "tu", "phat", "trien", "tong",
+    "hop", "tap", "doan", "hma", "nhh", "a/c", "ac", "tai", "tk", "so", "ct", "ck", "tt",
+    "chuyen", "tien", "thanh", "toan", "tra", "hang", "cho", "den", "tu", "qua", "zalo",
+    "mbvcb", "ibft", "napas", "qr", "gd", "ma", "hd", "hoa", "don", "mua", "ban", "nhom",
+    "thep", "sat", "gach", "xi", "mang", "xang", "dau", "lop", "tien", "mat", "vang", "te",
+    "don", "vi", "lpbank", "acb", "bidv", "vietinbank", "vcb", "mb", "agribank", "sacombank",
+    "ho", "kinh", "doanh", "hkd", "ubnd", "xa", "phuong", "tinh", "huyen", "cap", "thoat", "nuoc"
+}
+
+_LEGAL_PREFIX_WORDS = {
+    "cong", "ty", "cty", "tnhh", "cp", "co", "phan", "mtv", "ho", "kinh", "doanh", "hkd",
+    "trach", "nhiem", "huu", "han", "tu", "van", "dau", "tu", "xay", "dung", "thuong", "mai",
+    "dich", "vu", "san", "xuat", "van", "tai", "tm", "dv", "sx", "xd", "va", "dt", "dvtm",
+    "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc"
+}
+
+def _owner_code_candidates(owner_name):
+    if not owner_name:
+        return set()
+    clean = strip_accents(owner_name).lower()
+    clean = re.sub(r'[^a-z0-9\s]', ' ', clean)
+    tokens = [w for w in clean.split() if w and w not in _STOP_WORDS_NAME and len(w) >= 2]
+    cands = set()
+    if len(tokens) >= 2:
+        cands.add(" ".join(tokens))
+        cands.add("".join(tokens))
+        cands.add(" ".join(tokens[-2:]))
+        cands.add("".join(tokens[-2:]))
+    for alias_k, alias_v in _PARTNER_ALIASES:
+        if alias_k in clean:
+            cands.add(alias_k)
+            cands.add(alias_v)
+    return cands
+
+def _normalize_partner_search_variants(name):
+    """Tao cac cum tu khoa tim kiem tu Ten khach hang / NCC trong danh ba"""
+    norm = strip_accents(name).lower()
+    norm = re.sub(r'[^a-z0-9\s]', ' ', norm)
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    words = norm.split()
+    variants = []
+    if len(words) >= 2:
+        variants.append((norm, len(norm) + 20))
+    # Rut gon tien to phap ly ("cong ty tnhh tu van dau tu...") nhung giu lai it nhat 2 tu cuoi
+    core_words = []
+    for idx, w in enumerate(words):
+        if w in _LEGAL_PREFIX_WORDS and (len(words) - idx) > 2:
+            continue
+        core_words.append(w)
+    core = " ".join(core_words).strip()
+    if core and len(core) >= 4:
+        variants.append((core, len(core) + 10))
+    # Neu core van con "xd va tm an phu" -> thu lay 2-3 tu cuoi neu du dai
+    if len(core_words) >= 3:
+        tail2 = " ".join(core_words[-2:])
+        if len(tail2) >= 5:
+            variants.append((tail2, len(tail2)))
+        tail3 = " ".join(core_words[-3:])
+        if len(tail3) >= 7:
+            variants.append((tail3, len(tail3) + 2))
+    return variants
+
+def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands):
+    """Tim Ma doi tuong khop nhat trong danh sach KH/NCC da luu cua cong ty"""
+    if not partner_list:
+        return None
+    best_code = None
+    best_score = -1
+
+    # Loai ten chu tai khoan khoi van ban tim kiem
+    masked = " " + search_text_norm + " "
+    for oc in sorted(owner_cands, key=len, reverse=True):
+        if len(oc) >= 4:
+            masked = masked.replace(f" {oc} ", " ")
+
+    for item in partner_list:
+        code = str(item.get("code", "")).strip()
+        name = str(item.get("name", "")).strip()
+        mst = re.sub(r'\s+', '', str(item.get("mst", "") or ""))
+        if not code or not name:
+            continue
+
+        # 1. Khop Ma so thue (>= 10 so) -> chinh xac 100%
+        if len(mst) >= 10 and mst in raw_text:
+            return code
+
+        # 2. Khop theo ten
+        for variant, base_score in _normalize_partner_search_variants(name):
+            if variant in owner_cands:
+                continue
+            # Dung ranh gioi tu \b de tranh khop nham tu con
+            if re.search(r'(?<![a-z0-9])' + re.escape(variant) + r'(?![a-z0-9])', masked):
+                if base_score > best_score:
+                    best_score = base_score
+                    best_code = code
+
+    return best_code
+
+def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, secondary_list=None):
+    owner_cands = _owner_code_candidates(owner_name)
+    raw_combined = f"{mota} {doitac}"
+    norm_combined = re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())
+    norm_combined = re.sub(r'\s+', ' ', norm_combined).strip()
+
+    # 1. UU TIEN CAO NHAT: Tim trong Danh sach Khach hang / Nha cung cap da nap cua cong ty
+    if preferred_list:
+        matched = _match_from_directory(norm_combined, raw_combined, preferred_list, owner_cands)
+        if matched:
+            return matched
+    if secondary_list:
+        matched = _match_from_directory(norm_combined, raw_combined, secondary_list, owner_cands)
+        if matched:
+            return matched
+
+    # 2. Tim trong cot DoiTac (VietinBank / LPBank / MBBank)
+    doitac_clean = strip_accents(doitac or "").lower()
+    if doitac_clean and "tien mat" not in doitac_clean and "tai don vi" not in doitac_clean:
+        dt_main = re.split(r'\s*[–\-]\s*a/c:|a/c:', doitac_clean)[0].strip()
+        for kw, code in _PARTNER_ALIASES:
+            if kw in dt_main and kw not in owner_cands and code not in owner_cands:
+                return code
+        dt_words = [w for w in re.sub(r'[^a-z0-9\s]', ' ', dt_main).split()
+                    if w not in _STOP_WORDS_NAME and not w.isdigit()]
+        if dt_words:
+            cand_code = "".join(dt_words[:4])
+            if cand_code not in owner_cands and len(cand_code) >= 3:
+                return cand_code
+
+    # 3. Tim theo tu dien mac dinh trong noi dung MoTa
+    desc_clean = strip_accents(mota or "").lower()
+    desc_clean = re.sub(r'[_\-;,/]+', ' ', desc_clean)
+    desc_masked = desc_clean
+    for oc in sorted(owner_cands, key=len, reverse=True):
+        if len(oc) >= 4:
+            desc_masked = desc_masked.replace(oc, " ")
+
+    for kw, code in _PARTNER_ALIASES:
+        if kw in desc_masked and kw not in owner_cands and code not in owner_cands:
+            return code
+
+    # 4. Tu tach ten cong ty sau "cty" / "cong ty"
+    m_cty = re.search(r'(?:cong ty|cty)\s+(?:tnhh|cp|co phan|tm|dv|sx|xd|tmdv|xnk|\s)*([a-z0-9\s]{3,35})', desc_masked)
+    if m_cty:
+        words = [w for w in m_cty.group(1).split() if w not in _STOP_WORDS_NAME and not re.match(r'^\d{4,}$', w)]
+        if words:
+            code = "".join(words[:3])
+            if code not in owner_cands and len(code) >= 3:
+                return code
+
+    return ""
+
+
+def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
+    no_val = to_num(row.get('No'))
+    co_val = to_num(row.get('Co'))
+    mota = row.get('MoTa', '')
+    doitac = row.get('DoiTac', '')
+    magd = str(row.get('MaGD', '') or '').strip().upper()
+
+    txt = strip_accents(mota).lower()
+    dt_txt = strip_accents(doitac).lower()
+    combined = f"{txt} {dt_txt}"
+
+    # 1. LAI TIEN GUI (TK 515)
+    if co_val > 0 and no_val == 0:
+        if (magd == "IIPD" or any(k in combined for k in (
+            "lai nhap von", "but toan tra lai", "tra lai tai khoan", "tra lai tien gui",
+            "chi lai tk", "lai tien gui", "thanh toan lai thang"
+        )) or re.match(r'^tra lai\b', txt.strip())):
+            return "515", ""
+
+    # 2. PHI NGAN HANG / PHI CHUYEN TIEN (TK 6422)
+    if no_val > 0 and co_val == 0:
+        is_fee = False
+        if magd == "DDM" or magd.startswith("CHG"):
+            is_fee = True
+        elif any(k in combined for k in (
+            "thu phi", "phi mb", "phi dv", "phi bdsd", "phi sms", "phi bsms",
+            "phi qltk", "phi quan ly", "phi dich vu", "phi duy tri", "phi phat hanh",
+            "phi ban sec", "phi chuyen tien", "phi ck", "phi hoi bao", "service charge", "services charge"
+        )):
+            is_fee = True
+        elif txt.strip() == "vat" or ("vat" in txt and "phi dich vu" in dt_txt):
+            is_fee = True
+        elif "outward remittance" in magd.lower() and no_val <= 300000:
+            is_fee = True
+
+        if is_fee:
+            return "6422", ""
+
+    # 3. CAC KHOAN KHONG GAN VAO 1111/131/331 (Thue, BHXH, Vay, Noi bo, Luong...) -> DE TRONG
+    other_non_keywords = (
+        "nop thue", "thue thu nhap", "thue dien tu", "cham nop thue", "kho bac", "kbnn", "kb:1327",
+        "bhxh", "bao hiem", "khe uoc", "thu goc", "thu lai", "tra von vay", "tra lai vay",
+        "loan repayment", "thau chi", "dong goc lai", "giai ngan", "chuyen noi bo",
+        "chi luong", "ve duong", "vetc", "tra lai tien", "nop nham", "giao dich nham"
+    )
+    if any(k in combined for k in other_non_keywords):
+        return "", ""
+
+    # 4. NOP / RUT TIEN MAT, RUT / CHI SEC (TK 1111)
+    # Bao gom ca "CT nhanh 247 den: TRAN VAN TRUONG NOP TIEN" theo quy uoc cua nguoi dung
+    is_cash_or_cheque = (
+        "tien mat, vang tien te tai don vi" in dt_txt
+        or any(k in combined for k in (
+            "nop tien", "rut tien", "rut sec", "chi sec", "linh tien",
+            "nt vao tk", "nop tm", "nt-tk-acb", "nop tien mat"
+        ))
+        or txt.strip() in ("nt", "rt")
+        or (bool(re.search(r'\b(rt|nt)\b', txt)) and not any(k in txt for k in ("cty", "cong ty", "tnhh", "hang")))
+    )
+    if is_cash_or_cheque:
+        return "1111", ""
+
+    # 5. KHACH TRA TIEN (TK 131) -> CO > 0
+    if co_val > 0 and no_val == 0:
+        ma_dt = _extract_partner_code(mota, doitac, owner_name, preferred_list=customers, secondary_list=suppliers)
+        is_customer_pay = (
+            bool(ma_dt)
+            or bool(dt_txt and "tien mat" not in dt_txt)
+            or any(k in txt for k in (
+                "cty", "cong ty", "tnhh", "cp ", "co phan", "thanh toan", "tra tien",
+                "chuyen tien", "chuyen khoan", "ck ", "tien hang", "cong no", "hoa don",
+                "hd ", "dat hang", "dat coc", "ung tien", "hop dong", "van chuyen",
+                "tt ", "ttcn", "ban hang", "mbvcb", "247 den", "ibft", "qr"
+            ))
+        )
+        if is_customer_pay:
+            return "131", ma_dt
+
+    # 6. TRA TIEN NHA CUNG CAP (TK 331) -> NO > 0
+    if no_val > 0 and co_val == 0:
+        ma_dt = _extract_partner_code(mota, doitac, owner_name, preferred_list=suppliers, secondary_list=customers)
+        is_supplier_pay = (
+            bool(ma_dt)
+            or bool(dt_txt and "tien mat" not in dt_txt)
+            or any(k in txt for k in (
+                "cty", "cong ty", "tnhh", "cp ", "co phan", "thanh toan", "tra tien",
+                "chuyen tien", "chuyen khoan", "ck ", "tien hang", "mua hang", "tien thep",
+                "tien sat", "tien nhom", "tien gach", "tien xi mang", "tien lop", "tien dau",
+                "phu tung", "dat coc", "tt ", "247 di", "napas", "hoa don", "hd"
+            ))
+        )
+        if is_supplier_pay:
+            return "331", ma_dt
+
+    return "", ""
+
+
+# =========================================================================
+#  5. DIEU PHOI, DOI CHIEU & XUAT EXCEL
 # =========================================================================
 def extract_any(path, password=None):
     ext = os.path.splitext(path)[1].lower()
@@ -825,6 +1192,7 @@ def extract_any(path, password=None):
             elif bank == "bidv": res = extract_bidv(pdf)
             elif bank == "lpbank": res = extract_lpbank(pdf)
             elif bank == "acb": res = extract_acb(pdf)
+            elif bank == "mbbank": res = extract_mbbank(pdf)
             else: return {'source_file': source_name, 'bank': 'khong_xac_dinh', 'header_info': {}, 'rows': [], 'loi': 'Chua ho tro PDF ngan hang nay'}
         except Exception as e:
             return {'source_file': source_name, 'bank': bank, 'header_info': {}, 'rows': [], 'loi': f"Loi trich xuat PDF: {e}"}
@@ -866,31 +1234,28 @@ def make_sheet_name(file_name, used):
     return name
 
 
-def build_xlsx(file_paths, out_path, password=None):
-    """File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai"""
+def create_workbook_from_sheets(sheets_data, mode="4col"):
     FONT = "Arial"
     header_font = Font(name=FONT, bold=True, color="2C3E50", size=11)
-    header_fill = PatternFill("solid", fgColor="DCE6F7")
+    header_fill = PatternFill("solid", fgColor="DCE6F7" if mode == "4col" else "E6DEF7")
     normal_font = Font(name=FONT, size=10)
     thin = Side(style="thin", color="D0D7E2")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     num_fmt = '#,##0'
 
-    all_results = []
-    for p in file_paths:
-        res = extract_any(p, password)
-        warns = [] if res.get('loi') else validate(res)
-        all_results.append((res, warns))
-
     wb = Workbook()
     wb.remove(wb.active)
     used_names = set()
 
-    headers = ["Ngày", "Nợ", "Có", "Diễn giải"]
-    widths = [15, 18, 18, 65]
+    if mode == "asp":
+        headers = ["Ngày", "Nợ", "Có", "Diễn giải", "Tài khoản đối ứng", "Mã đối tượng"]
+        widths = [15, 17, 17, 60, 20, 22]
+    else:
+        headers = ["Ngày", "Nợ", "Có", "Diễn giải"]
+        widths = [15, 18, 18, 65]
 
-    for res, warns in all_results:
-        name = make_sheet_name(res['source_file'], used_names)
+    for s in sheets_data:
+        name = make_sheet_name(s['file'], used_names)
         ws = wb.create_sheet(name)
 
         for c, h in enumerate(headers, start=1):
@@ -898,25 +1263,34 @@ def build_xlsx(file_paths, out_path, password=None):
             cell.font, cell.fill, cell.border = header_font, header_fill, border
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        if res.get('loi'):
+        if s.get('error'):
             ws.cell(2, 1, "LỖI")
-            ws.cell(2, 4, res['loi'])
+            ws.cell(2, 4, s['error'])
         else:
-            for r_idx, gd in enumerate(res['rows'], start=2):
-                no_num = to_num(gd['No'])
-                co_num = to_num(gd['Co'])
+            for r_idx, gd in enumerate(s['rows'], start=2):
+                no_num = to_num(gd.get('No'))
+                co_num = to_num(gd.get('Co'))
 
-                c_ngay = ws.cell(r_idx, 1, gd['Ngay'])
+                c_ngay = ws.cell(r_idx, 1, gd.get('Ngay', ''))
                 c_no = ws.cell(r_idx, 2, no_num if no_num != 0 else None)
                 c_co = ws.cell(r_idx, 3, co_num if co_num != 0 else None)
-                c_dg = ws.cell(r_idx, 4, gd['MoTa'])
+                c_dg = ws.cell(r_idx, 4, gd.get('MoTa', ''))
 
                 c_ngay.alignment = Alignment(horizontal="center", vertical="top")
                 c_no.alignment = Alignment(horizontal="right", vertical="top")
                 c_co.alignment = Alignment(horizontal="right", vertical="top")
                 c_dg.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
-                for cell in (c_ngay, c_no, c_co, c_dg):
+                cells = [c_ngay, c_no, c_co, c_dg]
+
+                if mode == "asp":
+                    c_tk = ws.cell(r_idx, 5, gd.get('TK', ''))
+                    c_dt = ws.cell(r_idx, 6, gd.get('MaDT', ''))
+                    c_tk.alignment = Alignment(horizontal="center", vertical="top")
+                    c_dt.alignment = Alignment(horizontal="left", vertical="top")
+                    cells.extend([c_tk, c_dt])
+
+                for cell in cells:
                     cell.font = normal_font
                     cell.border = border
                 if c_no.value is not None: c_no.number_format = num_fmt
@@ -931,12 +1305,14 @@ def build_xlsx(file_paths, out_path, password=None):
         for c, h in enumerate(headers, start=1):
             ws.cell(1, c, h)
 
-    wb.save(out_path)
-    return all_results
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 # =========================================================================
-#  5. GIAO DIEN WEB PASTEL + NUT NOI 3D + XEM TRUOC 4 COT
+#  6. GIAO DIEN WEB PASTEL + DANH BA CONG TY + NUT NOI 3D
 # =========================================================================
 HTML_UI = r"""<!DOCTYPE html>
 <html lang="vi">
@@ -955,7 +1331,7 @@ HTML_UI = r"""<!DOCTYPE html>
             color: #3d485c;
         }
         .container {
-            max-width: 1180px;
+            max-width: 1260px;
             margin: 0 auto;
             background: rgba(255, 255, 255, 0.96);
             padding: 32px;
@@ -963,40 +1339,68 @@ HTML_UI = r"""<!DOCTYPE html>
             box-shadow: 0 12px 35px rgba(130, 145, 185, 0.16);
             border: 1px solid #eaeef7;
         }
-        h1 {
-            color: #4b659e;
-            margin: 0 0 8px 0;
-            font-size: 25px;
-            letter-spacing: -0.3px;
+        h1 { color: #4b659e; margin: 0 0 8px 0; font-size: 25px; letter-spacing: -0.3px; }
+        .subtitle { color: #6b768c; font-size: 14px; margin-bottom: 20px; line-height: 1.6; }
+
+        /* KHUNG DANH BA CONG TY */
+        .partner-card {
+            background: linear-gradient(180deg, #faf7ff 0%, #f4f7ff 100%);
+            border: 1.5px solid #e1dbf7;
+            border-radius: 16px;
+            padding: 18px 22px;
+            margin-bottom: 20px;
         }
-        .subtitle {
-            color: #6b768c;
-            font-size: 14px;
-            margin-bottom: 22px;
-            line-height: 1.6;
+        .partner-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
         }
+        .partner-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        select {
+            padding: 9px 12px;
+            border: 1.5px solid #d5ddf0;
+            border-radius: 10px;
+            font-size: 13.5px;
+            background: #fff;
+            color: #3d485c;
+            min-width: 240px;
+        }
+        .badge-count {
+            display: inline-block;
+            padding: 5px 11px;
+            border-radius: 8px;
+            font-size: 12.5px;
+            font-weight: 600;
+            background: #e8f8f0;
+            color: #1f704b;
+            border: 1px solid #bfead3;
+        }
+        .badge-empty {
+            background: #f5f6fa;
+            color: #7c879c;
+            border-color: #e0e4ee;
+        }
+
         .upload-zone {
             border: 2.5px dashed #9cb8f3;
             background: #f4f8ff;
-            padding: 32px 20px;
+            padding: 28px 20px;
             text-align: center;
             border-radius: 16px;
             cursor: pointer;
             margin-bottom: 18px;
             transition: all 0.2s ease;
         }
-        .upload-zone:hover {
-            background: #e9f1ff;
-            border-color: #779be8;
-            transform: translateY(-1px);
-        }
-        .controls {
-            display: flex;
-            gap: 14px;
-            align-items: center;
-            flex-wrap: wrap;
-            margin-bottom: 16px;
-        }
+        .upload-zone:hover { background: #e9f1ff; border-color: #779be8; transform: translateY(-1px); }
+        .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
         input[type="password"], input[type="text"] {
             padding: 11px 14px;
             border: 1.5px solid #d9e2f2;
@@ -1005,49 +1409,63 @@ HTML_UI = r"""<!DOCTYPE html>
             background: #fbfcff;
             color: #3d485c;
             outline: none;
-            transition: border-color 0.2s;
         }
         input:focus { border-color: #8eb0f2; }
 
+        /* NUT BAM HIEU UNG NOI 3D PASTEL */
         .btn {
-            padding: 12px 24px;
+            padding: 10px 20px;
             border: none;
             border-radius: 12px;
             font-weight: 700;
-            font-size: 14px;
+            font-size: 13.5px;
             cursor: pointer;
             text-decoration: none;
             display: inline-block;
             transition: all 0.15s ease;
             transform: translateY(0);
         }
+        .btn-sm { padding: 8px 14px; font-size: 12.5px; border-radius: 10px; }
         .btn-primary {
             background: linear-gradient(180deg, #91b3fa 0%, #769ce9 100%);
             color: #ffffff;
             box-shadow: 0 5px 0 #5b7fc9, 0 8px 16px rgba(118, 156, 233, 0.32);
         }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 7px 0 #5b7fc9, 0 12px 20px rgba(118, 156, 233, 0.38);
-        }
-        .btn-primary:active {
-            transform: translateY(3px);
-            box-shadow: 0 2px 0 #5b7fc9, 0 4px 8px rgba(118, 156, 233, 0.25);
-        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #5b7fc9, 0 12px 20px rgba(118, 156, 233, 0.38); }
+        .btn-primary:active { transform: translateY(3px); box-shadow: 0 2px 0 #5b7fc9, 0 4px 8px rgba(118, 156, 233, 0.25); }
 
         .btn-download {
             background: linear-gradient(180deg, #83ddb8 0%, #63c79e 100%);
             color: #164f38;
             box-shadow: 0 5px 0 #48a67f, 0 8px 16px rgba(99, 199, 158, 0.32);
         }
-        .btn-download:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 7px 0 #48a67f, 0 12px 20px rgba(99, 199, 158, 0.40);
+        .btn-download:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #48a67f, 0 12px 20px rgba(99, 199, 158, 0.40); }
+        .btn-download:active { transform: translateY(3px); box-shadow: 0 2px 0 #48a67f, 0 4px 8px rgba(99, 199, 158, 0.25); }
+
+        .btn-asp {
+            background: linear-gradient(180deg, #c2aff7 0%, #a58ee8 100%);
+            color: #ffffff;
+            box-shadow: 0 5px 0 #8269c9, 0 8px 16px rgba(165, 142, 232, 0.34);
         }
-        .btn-download:active {
-            transform: translateY(3px);
-            box-shadow: 0 2px 0 #48a67f, 0 4px 8px rgba(99, 199, 158, 0.25);
+        .btn-asp:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #8269c9, 0 12px 20px rgba(165, 142, 232, 0.42); }
+        .btn-asp:active { transform: translateY(3px); box-shadow: 0 2px 0 #8269c9, 0 4px 8px rgba(165, 142, 232, 0.25); }
+
+        .btn-soft {
+            background: linear-gradient(180deg, #ffffff 0%, #f1f4fb 100%);
+            color: #4b5d7a;
+            border: 1px solid #d9e1f2;
+            box-shadow: 0 3px 0 #d0d8ea;
         }
+        .btn-soft:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #c3cde3; }
+        .btn-soft:active { transform: translateY(2px); box-shadow: 0 1px 0 #c3cde3; }
+
+        .btn-peach {
+            background: linear-gradient(180deg, #ffd4be 0%, #f8b799 100%);
+            color: #693018;
+            box-shadow: 0 3px 0 #dc9372;
+        }
+        .btn-peach:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #dc9372; }
+        .btn-peach:active { transform: translateY(2px); box-shadow: 0 1px 0 #dc9372; }
 
         .tab-btn {
             padding: 9px 16px;
@@ -1061,15 +1479,8 @@ HTML_UI = r"""<!DOCTYPE html>
             box-shadow: 0 3px 0 #d5dceb;
             transition: all 0.15s ease;
         }
-        .tab-btn:hover {
-            transform: translateY(-1px);
-            background: #ebf0fb;
-            box-shadow: 0 4px 0 #c9d2e6;
-        }
-        .tab-btn:active {
-            transform: translateY(2px);
-            box-shadow: 0 1px 0 #c9d2e6;
-        }
+        .tab-btn:hover { transform: translateY(-1px); background: #ebf0fb; box-shadow: 0 4px 0 #c9d2e6; }
+        .tab-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #c9d2e6; }
         .tab-btn.active {
             background: linear-gradient(180deg, #b8a9f5 0%, #9c8be8 100%);
             color: #ffffff;
@@ -1077,17 +1488,34 @@ HTML_UI = r"""<!DOCTYPE html>
             box-shadow: 0 3px 0 #7562c7, 0 5px 10px rgba(156, 139, 232, 0.28);
         }
 
+        .mode-switch {
+            display: inline-flex;
+            gap: 8px;
+            background: #f2f5fc;
+            padding: 6px;
+            border-radius: 12px;
+            border: 1px solid #e1e8f5;
+        }
+        .mode-pill {
+            padding: 7px 14px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: #5b6982;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .mode-pill.active {
+            background: #ffffff;
+            color: #4b659e;
+            box-shadow: 0 2px 6px rgba(91, 127, 201, 0.18);
+        }
+
         #fileList { margin: 10px 0 0 0; font-size: 13px; color: #5b7fc9; font-weight: 600; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
-        th, td { border: 1px solid #e6ebf5; padding: 10px 12px; text-align: left; }
-        th {
-            background: #e4ecfc;
-            color: #364b75;
-            font-weight: 700;
-            position: sticky;
-            top: 0;
-            z-index: 2;
-        }
+        th, td { border: 1px solid #e6ebf5; padding: 9px 11px; text-align: left; }
+        th { background: #e4ecfc; color: #364b75; font-weight: 700; position: sticky; top: 0; z-index: 2; }
         tbody tr:nth-child(even) { background: #fafbfe; }
         tbody tr:hover { background: #f2f6ff; }
         .text-right { text-align: right; }
@@ -1100,15 +1528,52 @@ HTML_UI = r"""<!DOCTYPE html>
         .preview-section { margin-top: 26px; border-top: 2px dashed #e8edf7; padding-top: 20px; }
         .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
         .preview-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-        .scroll-box { max-height: 480px; overflow: auto; border: 1px solid #e1e7f2; border-radius: 12px; box-shadow: inset 0 1px 4px rgba(0,0,0,0.03); }
+        .scroll-box { max-height: 500px; overflow: auto; border: 1px solid #e1e7f2; border-radius: 12px; }
+        .cell-input {
+            width: 100%; padding: 5px 8px; border: 1px solid #dde4f2; border-radius: 6px;
+            font-size: 12.5px; background: #fcfdff; color: #3d485c;
+        }
+        .cell-input:focus { border-color: #9c8be8; background: #fff; outline: none; }
+        .tk-badge { text-align: center; font-weight: 700; color: #5b48a8; }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
     <div class="subtitle">
-        Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • File Excel tải về gồm 4 cột: <b>Ngày, Nợ, Có, Diễn giải</b>.
+        Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • 2 mẫu kết xuất: <b>Mẫu 4 cột</b> và <b>Kết xuất cho ASP</b> (tự phân loại <code>1111</code>, <code>6422</code>, <code>131</code>, <code>331</code>, <code>515</code> &amp; ghép <code>Mã đối tượng</code> từ danh bạ công ty).
+    </div>
+
+    <!-- KHU VUC QUAN LY DANH SACH KHACH HANG / NHA CUNG CAP THEO CONG TY -->
+    <div class="partner-card">
+        <div class="partner-header">
+            <div style="font-weight: 700; color: #574699; font-size: 15px;">
+                🏢 Danh bạ Khách hàng / Nhà cung cấp theo từng Công ty (Tự động lưu trên trình duyệt)
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="btn btn-soft btn-sm" onclick="exportBackup()">💾 Sao lưu danh bạ</button>
+                <button class="btn btn-soft btn-sm" onclick="document.getElementById('importBackupFile').click()">📂 Nhập sao lưu</button>
+                <input type="file" id="importBackupFile" accept=".json" style="display:none" onchange="importBackup(this)">
+            </div>
+        </div>
+
+        <div class="partner-row" style="margin-bottom: 12px;">
+            <label style="font-weight: 600; font-size: 13px;">Đang chọn công ty:</label>
+            <select id="companySelect" onchange="onSelectCompany()"></select>
+            <button class="btn btn-soft btn-sm" onclick="addCompany()">➕ Thêm công ty</button>
+            <button class="btn btn-peach btn-sm" onclick="deleteCompany()">🗑️ Xóa công ty</button>
+        </div>
+
+        <div class="partner-row">
+            <input type="file" id="upKhFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', this)">
+            <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upKhFile')">📥 Nạp DS Khách hàng (.xlsx)</button>
+            <span id="khStatus" class="badge-count badge-empty">0 Khách hàng</span>
+
+            <input type="file" id="upNccFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', this)">
+            <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upNccFile')">📥 Nạp DS Nhà cung cấp (.xlsx)</button>
+            <span id="nccStatus" class="badge-count badge-empty">0 Nhà cung cấp</span>
+        </div>
     </div>
 
     <div class="upload-zone" onclick="document.getElementById('files').click()">
@@ -1119,15 +1584,18 @@ HTML_UI = r"""<!DOCTYPE html>
 
     <div class="controls">
         <input type="password" id="pwd" style="width: 320px; max-width: 100%;" placeholder="🔑 Mật khẩu file PDF (nếu có)">
-        <button class="btn btn-primary" onclick="uploadAndProcess()">✨ BẮT ĐẦU TRÍCH XUẤT & XEM TRƯỚC</button>
+        <button class="btn btn-primary" onclick="uploadAndProcess()">✨ BẮT ĐẦU TRÍCH XUẤT &amp; XEM TRƯỚC</button>
     </div>
 
-    <div id="loader" class="loader">⏳ Đang xử lý và đối chiếu dữ liệu, vui lòng đợi...</div>
+    <div id="loader" class="loader">⏳ Đang trích xuất, đối chiếu số dư và ghép mã đối tượng...</div>
 
     <div id="resultBox" style="display:none;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
             <h3 style="margin: 0; color: #4b659e;">📊 Bảng Đối Chiếu Tổng Quan</h3>
-            <a id="downloadLink" class="btn btn-download" href="#" download="SaoKe_4Cot_Chuan.xlsx">📥 TẢI FILE EXCEL (4 CỘT)</a>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <button class="btn btn-download" onclick="downloadExcel('4col')">📥 Tải Excel (4 cột)</button>
+                <button class="btn btn-asp" onclick="downloadExcel('asp')">📘 Kết xuất cho ASP (.xlsx)</button>
+            </div>
         </div>
 
         <div style="border-radius: 12px; overflow: hidden; border: 1px solid #e6ebf5;">
@@ -1144,22 +1612,24 @@ HTML_UI = r"""<!DOCTYPE html>
         </div>
 
         <div class="preview-section">
-            <h3 style="margin: 0 0 12px 0; color: #4b659e;">🔍 Xem Trước Chi Tiết (4 Cột Chuẩn Excel)</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                <h3 style="margin: 0; color: #4b659e;">🔍 Xem Trước &amp; Chỉnh Sửa Trước Khi Tải</h3>
+                <div class="mode-switch">
+                    <button id="btnMode4" class="mode-pill" onclick="switchPreviewMode('4col')">Mẫu 4 cột</button>
+                    <button id="btnModeAsp" class="mode-pill active" onclick="switchPreviewMode('asp')">Kết xuất cho ASP (6 cột)</button>
+                </div>
+            </div>
+
             <div id="tabs" class="tabs"></div>
+
             <div class="preview-toolbar">
                 <div id="sheetMeta" style="font-size: 13px; color: #5b6982; font-weight: 500;"></div>
-                <input type="text" id="searchBox" style="width: 290px;" placeholder="🔎 Tìm theo ngày, số tiền, diễn giải..." oninput="filterPreview()">
+                <input type="text" id="searchBox" style="width: 300px;" placeholder="🔎 Tìm ngày, số tiền, diễn giải, TK, mã..." oninput="filterPreview()">
             </div>
+
             <div class="scroll-box">
                 <table>
-                    <thead>
-                        <tr>
-                            <th class="text-center" style="width: 115px;">Ngày</th>
-                            <th class="text-right" style="width: 145px;">Nợ</th>
-                            <th class="text-right" style="width: 145px;">Có</th>
-                            <th>Diễn giải</th>
-                        </tr>
-                    </thead>
+                    <thead id="previewHead"></thead>
                     <tbody id="previewBody"></tbody>
                 </table>
             </div>
@@ -1168,8 +1638,142 @@ HTML_UI = r"""<!DOCTYPE html>
 </div>
 
 <script>
+const STORAGE_KEY = 'saoke_company_directories_v1';
+let db = { activeCompany: '', companies: {} };
 let allSheetsData = [];
 let activeIdx = 0;
+let previewMode = 'asp';
+
+function loadDB() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) db = JSON.parse(raw);
+    } catch (e) {}
+    if (!db.companies) db.companies = {};
+    renderCompanyDropdown();
+}
+
+function saveDB() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    renderCompanyDropdown();
+}
+
+function renderCompanyDropdown() {
+    const sel = document.getElementById('companySelect');
+    sel.innerHTML = '<option value="">-- Dùng từ điển chung (chưa chọn công ty) --</option>';
+    Object.keys(db.companies).sort().forEach(name => {
+        let opt = document.createElement('option');
+        opt.value = name;
+        opt.text = name;
+        sel.appendChild(opt);
+    });
+    sel.value = db.activeCompany && db.companies[db.activeCompany] ? db.activeCompany : '';
+    updateStatusBadges();
+}
+
+function updateStatusBadges() {
+    const comp = db.companies[db.activeCompany];
+    const khEl = document.getElementById('khStatus');
+    const nccEl = document.getElementById('nccStatus');
+    if (!comp) {
+        khEl.innerText = '0 Khách hàng'; khEl.className = 'badge-count badge-empty';
+        nccEl.innerText = '0 Nhà cung cấp'; nccEl.className = 'badge-count badge-empty';
+        return;
+    }
+    const khCnt = (comp.customers || []).length;
+    const nccCnt = (comp.suppliers || []).length;
+    khEl.innerText = `${khCnt} Khách hàng`;
+    khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+    nccEl.innerText = `${nccCnt} Nhà cung cấp`;
+    nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+}
+
+function onSelectCompany() {
+    db.activeCompany = document.getElementById('companySelect').value;
+    saveDB();
+}
+
+function addCompany() {
+    const name = prompt('Nhập tên Công ty mới (ví dụ: Công ty TNHH Lân Hiền):');
+    if (!name || !name.trim()) return;
+    const cleanName = name.trim();
+    if (!db.companies[cleanName]) {
+        db.companies[cleanName] = { customers: [], suppliers: [] };
+    }
+    db.activeCompany = cleanName;
+    saveDB();
+}
+
+function deleteCompany() {
+    if (!db.activeCompany) { alert('Hãy chọn một công ty để xóa!'); return; }
+    if (!confirm(`Bạn có chắc muốn xóa danh bạ của "${db.activeCompany}"?`)) return;
+    delete db.companies[db.activeCompany];
+    db.activeCompany = '';
+    saveDB();
+}
+
+function triggerPartnerUpload(inputId) {
+    if (!db.activeCompany) {
+        const name = prompt('Bạn chưa chọn công ty. Nhập tên Công ty muốn lưu danh sách này:');
+        if (!name || !name.trim()) return;
+        const cleanName = name.trim();
+        if (!db.companies[cleanName]) db.companies[cleanName] = { customers: [], suppliers: [] };
+        db.activeCompany = cleanName;
+        saveDB();
+    }
+    document.getElementById(inputId).click();
+}
+
+async function uploadPartnerList(roleKey, inputEl) {
+    if (!inputEl.files.length || !db.activeCompany) return;
+    const fd = new FormData();
+    fd.append('file', inputEl.files[0]);
+    try {
+        const res = await fetch('/parse_partners', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        db.companies[db.activeCompany][roleKey] = data.items || [];
+        saveDB();
+        const label = roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp';
+        alert(`✅ Đã nạp và lưu ${data.items.length} ${label} cho "${db.activeCompany}"!`);
+    } catch (e) {
+        alert('Lỗi khi đọc file danh sách: ' + e);
+    } finally {
+        inputEl.value = '';
+    }
+}
+
+function exportBackup() {
+    const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'DanhBa_KhachHang_NCC_Backup.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function importBackup(inputEl) {
+    if (!inputEl.files.length) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const imported = JSON.parse(e.target.result);
+            if (imported && imported.companies) {
+                db.companies = { ...db.companies, ...imported.companies };
+                if (imported.activeCompany) db.activeCompany = imported.activeCompany;
+                saveDB();
+                alert('✅ Đã khôi phục danh bạ các công ty thành công!');
+            } else {
+                alert('File sao lưu không đúng định dạng!');
+            }
+        } catch (err) {
+            alert('Lỗi đọc file JSON: ' + err);
+        }
+    };
+    reader.readAsText(inputEl.files[0]);
+    inputEl.value = '';
+}
 
 function showFiles() {
     const inp = document.getElementById('files');
@@ -1181,9 +1785,11 @@ async function uploadAndProcess() {
     const inp = document.getElementById('files');
     if (!inp.files.length) { alert('Vui lòng chọn ít nhất 1 file sao kê!'); return; }
 
+    const activeComp = db.companies[db.activeCompany] || { customers: [], suppliers: [] };
     const formData = new FormData();
     for (let f of inp.files) formData.append('files', f);
     formData.append('password', document.getElementById('pwd').value);
+    formData.append('partners_json', JSON.stringify(activeComp));
 
     document.getElementById('loader').style.display = 'block';
     document.getElementById('resultBox').style.display = 'none';
@@ -1206,15 +1812,19 @@ async function uploadAndProcess() {
 
         allSheetsData = data.sheets || [];
         renderTabs();
-
-        const dl = document.getElementById('downloadLink');
-        dl.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + data.file_b64;
         document.getElementById('resultBox').style.display = 'block';
     } catch (e) {
         alert('Có lỗi xảy ra: ' + e);
     } finally {
         document.getElementById('loader').style.display = 'none';
     }
+}
+
+function switchPreviewMode(mode) {
+    previewMode = mode;
+    document.getElementById('btnMode4').classList.toggle('active', mode === '4col');
+    document.getElementById('btnModeAsp').classList.toggle('active', mode === 'asp');
+    filterPreview();
 }
 
 function renderTabs() {
@@ -1236,7 +1846,7 @@ function selectTab(idx) {
     document.getElementById('searchBox').value = '';
     const s = allSheetsData[idx];
     document.getElementById('sheetMeta').innerHTML =
-        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Tổng số giao dịch: <b>${s.rows.length}</b>`;
+        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Chủ TK: <b>${s.customer || '—'}</b> • Giao dịch: <b>${s.rows.length}</b>`;
     renderPreviewRows(s.rows);
 }
 
@@ -1248,31 +1858,100 @@ function filterPreview() {
         (r.Ngay || '').toLowerCase().includes(kw) ||
         (r.MoTa || '').toLowerCase().includes(kw) ||
         (r.No || '').toLowerCase().includes(kw) ||
-        (r.Co || '').toLowerCase().includes(kw)
+        (r.Co || '').toLowerCase().includes(kw) ||
+        (r.TK || '').toLowerCase().includes(kw) ||
+        (r.MaDT || '').toLowerCase().includes(kw)
     );
     renderPreviewRows(filtered);
 }
 
+function updateRowField(rowObjIndex, field, value) {
+    if (allSheetsData[activeIdx] && allSheetsData[activeIdx].rows[rowObjIndex]) {
+        allSheetsData[activeIdx].rows[rowObjIndex][field] = value.trim();
+    }
+}
+
 function renderPreviewRows(rows) {
+    const thead = document.getElementById('previewHead');
     const tbody = document.getElementById('previewBody');
     tbody.innerHTML = '';
+
+    if (previewMode === 'asp') {
+        thead.innerHTML = `<tr>
+            <th class="text-center" style="width: 105px;">Ngày</th>
+            <th class="text-right" style="width: 130px;">Nợ</th>
+            <th class="text-right" style="width: 130px;">Có</th>
+            <th>Diễn giải</th>
+            <th class="text-center" style="width: 120px;">TK đối ứng</th>
+            <th style="width: 155px;">Mã đối tượng</th>
+        </tr>`;
+    } else {
+        thead.innerHTML = `<tr>
+            <th class="text-center" style="width: 115px;">Ngày</th>
+            <th class="text-right" style="width: 145px;">Nợ</th>
+            <th class="text-right" style="width: 145px;">Có</th>
+            <th>Diễn giải</th>
+        </tr>`;
+    }
+
+    const colCount = previewMode === 'asp' ? 6 : 4;
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center" style="color:#888;padding:24px;">Không có dữ liệu giao dịch phù hợp</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${colCount}" class="text-center" style="color:#888;padding:24px;">Không có dữ liệu giao dịch phù hợp</td></tr>`;
         return;
     }
+
+    const sourceRows = allSheetsData[activeIdx].rows;
     rows.forEach(r => {
+        const origIdx = sourceRows.indexOf(r);
         let tr = document.createElement('tr');
         let noDisp = (r.No && r.No !== '0') ? r.No : '';
         let coDisp = (r.Co && r.Co !== '0') ? r.Co : '';
-        tr.innerHTML = `
-            <td class="text-center"><b>${r.Ngay}</b></td>
-            <td class="text-right debit">${noDisp}</td>
-            <td class="text-right credit">${coDisp}</td>
-            <td>${r.MoTa}</td>
-        `;
+
+        if (previewMode === 'asp') {
+            tr.innerHTML = `
+                <td class="text-center"><b>${r.Ngay}</b></td>
+                <td class="text-right debit">${noDisp}</td>
+                <td class="text-right credit">${coDisp}</td>
+                <td>${r.MoTa}</td>
+                <td><input class="cell-input tk-badge" value="${r.TK || ''}" onchange="updateRowField(${origIdx}, 'TK', this.value)" placeholder="Trống"></td>
+                <td><input class="cell-input" value="${r.MaDT || ''}" onchange="updateRowField(${origIdx}, 'MaDT', this.value)" placeholder="Trống"></td>
+            `;
+        } else {
+            tr.innerHTML = `
+                <td class="text-center"><b>${r.Ngay}</b></td>
+                <td class="text-right debit">${noDisp}</td>
+                <td class="text-right credit">${coDisp}</td>
+                <td>${r.MoTa}</td>
+            `;
+        }
         tbody.appendChild(tr);
     });
 }
+
+async function downloadExcel(mode) {
+    if (!allSheetsData.length) return;
+    try {
+        const res = await fetch('/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: mode, sheets: allSheetsData })
+        });
+        if (!res.ok) { alert('Lỗi khi tạo file Excel'); return; }
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = mode === 'asp' ? 'KetXuat_Cho_ASP.xlsx' : 'SaoKe_4Cot_Chuan.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Lỗi tải file: ' + e);
+    }
+}
+
+loadDB();
 </script>
 </body>
 </html>"""
@@ -1283,10 +1962,33 @@ def index():
     return render_template_string(HTML_UI)
 
 
+@app.route("/parse_partners", methods=["POST"])
+def parse_partners_route():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "Không có file danh sách được tải lên"}), 400
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            p = os.path.join(tmp_dir, os.path.basename(f.filename))
+            f.save(p)
+            items = parse_partner_excel(p)
+        return jsonify({"items": items})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @app.route("/process", methods=["POST"])
 def process_files():
     uploaded = request.files.getlist("files")
     pwd = request.form.get("password", "").strip() or None
+    partners_raw = request.form.get("partners_json", "{}")
+    try:
+        partners_obj = json.loads(partners_raw)
+    except Exception:
+        partners_obj = {}
+    customers = partners_obj.get("customers", [])
+    suppliers = partners_obj.get("suppliers", [])
+
     if not uploaded:
         return jsonify({"error": "Không có file nào được tải lên"}), 400
 
@@ -1297,17 +1999,16 @@ def process_files():
             f.save(p)
             paths.append(p)
 
-        out_xlsx = os.path.join(tmp_dir, "SaoKe_4Cot_Chuan.xlsx")
-        results = build_xlsx(paths, out_xlsx, password=pwd)
-
-        with open(out_xlsx, "rb") as f:
-            b64_data = base64.b64encode(f.read()).decode("utf-8")
-
         summary, sheets = [], []
-        for res, warns in results:
+        for p in paths:
+            res = extract_any(p, password=pwd)
+            warns = [] if res.get('loi') else validate(res)
             hi = res.get('header_info', {})
+            owner_name = hi.get('customer') or hi.get('account_name') or ''
+
             t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
             t_cred = to_num(res['total_credit']) if res.get('total_credit') else sum(to_num(x['Co']) for x in res['rows'])
+
             if res.get('loi'): status = "❌ LỖI: " + res['loi']
             elif warns: status = "⚠️ CẢNH BÁO: " + " | ".join(warns[:2])
             else: status = "Khớp chuẩn"
@@ -1326,21 +2027,43 @@ def process_files():
             for r in res['rows']:
                 no_v = to_num(r['No'])
                 co_v = to_num(r['Co'])
+                tk_doi_ung, ma_dt = classify_for_asp(
+                    r, owner_name=owner_name, customers=customers, suppliers=suppliers
+                )
                 preview_rows.append({
                     "Ngay": r['Ngay'],
                     "No": f"{no_v:,.0f}" if no_v != 0 else "0",
                     "Co": f"{co_v:,.0f}" if co_v != 0 else "0",
-                    "MoTa": r['MoTa']
+                    "MoTa": r['MoTa'],
+                    "TK": tk_doi_ung,
+                    "MaDT": ma_dt
                 })
 
             sheets.append({
                 "file": res['source_file'],
                 "bank": str(res['bank']).upper(),
                 "account": hi.get('account_no', ''),
+                "customer": owner_name,
+                "error": res.get('loi'),
                 "rows": preview_rows
             })
 
-    return jsonify({"summary": summary, "sheets": sheets, "file_b64": b64_data})
+    return jsonify({"summary": summary, "sheets": sheets})
+
+
+@app.route("/export", methods=["POST"])
+def export_excel_route():
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get("mode", "4col")
+    sheets = payload.get("sheets", [])
+    xlsx_bytes = create_workbook_from_sheets(sheets, mode=mode)
+    fname = "KetXuat_Cho_ASP.xlsx" if mode == "asp" else "SaoKe_4Cot_Chuan.xlsx"
+    return send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname
+    )
 
 
 if __name__ == "__main__":
