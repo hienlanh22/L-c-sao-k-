@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 CONG CU TRICH XUAT SAO KE NGAN HANG
-- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (fix nhan dien cot tien theo mep phai x1)
+- PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB (giu nguyen thuat toan tu TrichXuatSaoKe 4)
 - HTML: VPBank (T24 Core)
-- Excel / CSV: Sacombank (fix 17-07-2025), Agribank IPCAS, Excel khac
+- Excel / CSV: Sacombank, Agribank IPCAS, Excel khac
 - Dinh dang ngay: dd/mm/yyyy
 - File Excel tai ve chi co 4 cot: Ngay, No, Co, Dien giai
 """
@@ -13,7 +13,6 @@ from html.parser import HTMLParser
 import os
 import re
 import tempfile
-import unicodedata
 import webbrowser
 from threading import Timer
 
@@ -108,20 +107,18 @@ def _vn_money_to_std_str(val):
 
 
 # =========================================================================
-#  2. NHAN DIEN NGAN HANG TU PDF
+#  2. NHAN DIEN NGAN HANG TU NOI DUNG FILE PDF (Giu nguyen code 4)
 # =========================================================================
 def detect_bank(text):
-    t = unicodedata.normalize("NFC", text or "")
-    tl = t.lower()
-    if "ngân hàng tmcp công thương việt nam" in tl or "efast" in tl or "vietinbank.vn" in tl:
-        return "vietinbank"
-    if "ngân hàng tmcp đầu tư và phát triển việt nam" in tl or "bank for investment and development" in tl:
-        return "bidv"
-    if "lpbank" in tl or "loc phat viet nam" in tl or "lộc phát việt nam" in tl:
-        return "lpbank"
-    if ("acb.com.vn" in tl or "ngân hàng thương mại cổ phần á châu" in tl
-            or "asia commercial bank" in tl or "1900 54 54 86" in tl or "acb signature" in tl):
+    t = text or ""
+    if "www.acb.com.vn" in t or ("ASIA COMMERCIAL BANK" in t and "Tổng tiền rút ra" in t):
         return "acb"
+    if "Ngân Hàng TMCP Công Thương Việt Nam" in t or "eFAST" in t or "vietinbank.vn" in t:
+        return "vietinbank"
+    if "NGÂN HÀNG TMCP ĐẦU TƯ VÀ PHÁT TRIỂN VIỆT NAM" in t or "Bank for Investment and Development" in t:
+        return "bidv"
+    if "LPBank" in t or "Loc Phat Viet Nam" in t or "Lộc Phát Việt Nam" in t:
+        return "lpbank"
     return "unknown"
 
 
@@ -347,184 +344,193 @@ def extract_lpbank(pdf):
 
 
 # =========================================================================
-#  3D. ACB PDF (Phan loai 3 cot tien bang mep phai x1 tu tieu de)
+#  3D. ACB PDF (LAY NGUYEN BAN TU FILE TrichXuatSaoKe (4).py)
 # =========================================================================
-_ACB_MONEY_RE = re.compile(r'^\d{1,3}([.,]\d{3})+$|^\d{1,3}$')
-_ACB_DATE_RE = re.compile(r'^\d{2}/\d{2}/\d{4}$')
+ACB_NGAY_CHINH = "hieu_luc"
+
+_ACB_DEFAULT_EDGES = [36.0, 83.4, 139.6, 164.3, 322.7, 401.5, 480.2, 559.0]
+_ACB_DATE_RE = re.compile(r'\d{2}/\d{2}/\d{4}')
+_ACB_NUM_RE = r'(-?[\d.,]+)'
+
+
+def _acb_amount(s):
+    """'25.920.000' -> '25920000' ; '1.234,56' -> '1234.56' ; '' -> ''."""
+    s = (s or "").strip().replace(" ", "")
+    if not s:
+        return ""
+    neg = s.startswith("-") or (s.startswith("(") and s.endswith(")"))
+    s = s.strip("-()")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", "") if re.fullmatch(r'\d{1,3}(,\d{3})+', s) else s.replace(",", ".")
+    elif "." in s and re.fullmatch(r'\d{1,3}(\.\d{3})+', s):
+        s = s.replace(".", "")
+    return ("-" if neg else "") + s
+
+
+def _acb_is_header_fill(r):
+    c = r.get('non_stroking_color')
+    try:
+        return c is not None and len(c) == 3 and abs(c[0] - 0.722) < 0.03 \
+            and abs(c[1] - 0.914) < 0.03 and abs(c[2] - 1.0) < 0.03
+    except TypeError:
+        return False
+
+
+def _acb_layout(page, words):
+    """Tra ve (canh cac cot, dong bat dau bang giao dich) cua 1 trang."""
+    groups = {}
+    for r in page.rects:
+        if _acb_is_header_fill(r):
+            groups.setdefault(round(r['top']), []).append(r)
+    if groups:
+        grp = max(groups.values(), key=len)
+        if len(grp) == 7:
+            xs = sorted(r['x0'] for r in grp)
+            return xs + [max(r['x1'] for r in grp)], max(r['bottom'] for r in grp)
+    ghi = [w['top'] for w in words if w['text'] == 'Ghi' and 330 < (w['x0'] + w['x1']) / 2 < 410]
+    return list(_ACB_DEFAULT_EDGES), (min(ghi) + 14 if ghi else 0.0)
+
+
+def _acb_row_bounds(tops, anchors, thr=11.7):
+    tops = sorted(set(tops))
+    cuts = []
+    for a, b in zip(anchors, anchors[1:]):
+        seg = [t for t in tops if a - 1.0 <= t <= b + 1.0]
+        if len(seg) >= 2:
+            lo, hi = max(zip(seg, seg[1:]), key=lambda p: p[1] - p[0])
+            cuts.append((lo + hi) / 2)
+        else:
+            cuts.append((a + b) / 2)
+    top_edge = anchors[0]
+    for t in sorted((t for t in tops if t < anchors[0] - 1.0), reverse=True):
+        if top_edge - t > thr:
+            break
+        top_edge = t
+    bot_edge = anchors[-1]
+    for t in sorted(t for t in tops if t > anchors[-1] + 1.0):
+        if t - bot_edge > thr:
+            break
+        bot_edge = t
+    edges = [top_edge - 1.0] + cuts + [bot_edge + 1.0]
+    return list(zip(edges[:-1], edges[1:]))
+
+
+def _acb_page_rows(page):
+    words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+    edges, table_top = _acb_layout(page, words)
+
+    def col_of(w):
+        c = (w['x0'] + w['x1']) / 2
+        for i in range(7):
+            if edges[i] <= c < edges[i + 1]:
+                return i
+        return None
+
+    cand = [(w, col_of(w)) for w in words if w['top'] >= table_top]
+    cand = [(w, c) for w, c in cand if c is not None]
+    anchors = sorted(w['top'] for w, c in cand if c == 2 and re.fullmatch(r'\d+', w['text']))
+    if not anchors:
+        return []
+    bounds = _acb_row_bounds([w['top'] for w, _ in cand], anchors)
+
+    rows = []
+    for (lo, hi) in bounds:
+        cells = {i: [] for i in range(7)}
+        for w, c in cand:
+            if lo < w['top'] <= hi:
+                cells[c].append(w)
+
+        def txt(i):
+            ws = sorted(cells[i], key=lambda w: (round(w['top']), w['x0']))
+            return " ".join(w['text'] for w in ws).strip()
+
+        sogd = next((w['text'] for w in cells[2] if re.fullmatch(r'\d+', w['text'])), "")
+        m0 = _ACB_DATE_RE.search(txt(0))
+        rows.append({
+            'hieu_luc': m0.group(0) if m0 else txt(0),
+            'giao_dich': txt(1),
+            'so_gd': sogd,
+            'noi_dung': txt(3),
+            'no': _acb_amount(txt(4)),
+            'co': _acb_amount(txt(5)),
+            'so_du': _acb_amount(txt(6)),
+        })
+    return rows
+
+
+def _acb_header(page):
+    info = {}
+    text = page.extract_text() or ""
+
+    m = re.search(r'Thời gian sao kê\s*(\d{2}/\d{2}/\d{4})\s*-\s*(\d{2}/\d{2}/\d{4})', text)
+    if m:
+        info['period'] = f"Tu {m.group(1)} den {m.group(2)}"
+    for key, pat in (('beginning', r'Số dư đầu\s+'), ('total_debit', r'Tổng tiền rút ra\s+'),
+                     ('total_credit', r'Tổng tiền gửi vào\s+'), ('ending', r'Số dư cuối\s+')):
+        mm = re.search(pat + _ACB_NUM_RE, text)
+        if mm:
+            info[key] = _acb_amount(mm.group(1))
+
+    words = page.extract_words()
+    left = [w for w in words if w['x1'] < 145 and 150 < w['top'] < 340]
+    line_tops = sorted({round(w['top'], 1) for w in left})
+    labels = {}
+    for t in line_tops:
+        s = " ".join(w['text'] for w in sorted((w for w in left if abs(w['top'] - t) < 1.5),
+                                               key=lambda w: w['x0']))
+        key = ('name' if s.startswith('Chủ') else 'acc' if s.startswith('Số tài khoản')
+               else 'mst' if (s.startswith('Mã số thuế') or s.startswith('Giấy'))
+               else 'addr' if s.startswith('Địa') else None)
+        if key:
+            labels.setdefault(key, []).append(t)
+            if key == 'acc':
+                cm = re.search(r'\((\w{3})\)', s)
+                if cm:
+                    info['currency'] = cm.group(1)
+    if labels:
+        centers = {k: sum(v) / len(v) for k, v in labels.items()}
+        lo = min(min(v) for v in labels.values()) - 12
+        hi = max(max(v) for v in labels.values()) + 12
+        vals = [w for w in words if 150 <= w['x0'] < 352 and lo <= w['top'] <= hi]
+        got = {}
+        for t in sorted({round(w['top'], 1) for w in vals}):
+            s = " ".join(w['text'] for w in sorted((w for w in vals if abs(w['top'] - t) < 1.5),
+                                                   key=lambda w: w['x0']))
+            k = min(centers, key=lambda kk: abs(centers[kk] - t))
+            got.setdefault(k, []).append(s)
+        info['customer'] = " ".join(got.get('name', []))
+        info['account_no'] = " ".join(got.get('acc', []))
+        info['tax_code'] = " ".join(got.get('mst', []))
+        info['address'] = " ".join(got.get('addr', []))
+    return info
+
 
 def extract_acb(pdf):
-    header_info, all_rows = {}, []
-    beginning_balance = ending_balance = total_debit = total_credit = None
+    hdr = _acb_header(pdf.pages[0])
+    header_info = {k: hdr[k] for k in ('period', 'currency', 'customer', 'account_no', 'tax_code', 'address')
+                   if hdr.get(k)}
+    header_info['bank'] = "ACB (Ngan hang TMCP A Chau)"
 
-    p0 = pdf.pages[0]
-    W0, H0 = p0.width, p0.height
-    p0_text = unicodedata.normalize("NFC", p0.extract_text() or "")
-
-    for line in p0_text.split("\n"):
-        line = line.strip()
-        if line.startswith("Số tài khoản"):
-            m = re.search(r'(\d{5,})', line)
-            if m: header_info['account_no'] = m.group(1)
-        elif line.startswith("Số dư đầu"):
-            m = re.search(r'([\d.,]+)$', line)
-            if m: beginning_balance = _vn_money_to_std_str(m.group(1))
-        elif line.startswith("Tổng tiền rút ra"):
-            m = re.search(r'([\d.,]+)$', line)
-            if m: total_debit = _vn_money_to_std_str(m.group(1))
-        elif line.startswith("Tổng tiền gửi vào"):
-            m = re.search(r'([\d.,]+)$', line)
-            if m: total_credit = _vn_money_to_std_str(m.group(1))
-        elif line.startswith("Số dư cuối"):
-            m = re.search(r'([\d.,]+)$', line)
-            if m: ending_balance = _vn_money_to_std_str(m.group(1))
-
-    p0_words = p0.extract_words(use_text_flow=False, keep_blank_chars=False)
-    for w in p0_words:
-        w['text'] = unicodedata.normalize("NFC", w['text'])
-
-    col1_dates_p0 = sorted([w for w in p0_words if w['x0'] < 0.13 * W0 and _ACB_DATE_RE.match(w['text'])], key=lambda w: w['top'])
-    col2_dates_p0 = [w for w in p0_words if 0.13 * W0 <= w['x0'] < 0.22 * W0 and _ACB_DATE_RE.match(w['text'])]
-
-    first_tx_y = None
-    for d1 in col1_dates_p0:
-        if any(abs(d2['top'] - d1['top']) < 0.025 * H0 for d2 in col2_dates_p0):
-            first_tx_y = d1['top']
-            break
-
-    if first_tx_y:
-        hdr_above = [w for w in p0_words if (first_tx_y - 0.08 * H0) <= w['top'] < (first_tx_y - 0.005 * H0)]
-        p0_table_top = (max([w['bottom'] for w in hdr_above], default=first_tx_y - 20) + 1.5)
-    else:
-        hdr_above = []
-        p0_table_top = 0.38 * H0
-
-    x1_rut = max([w['x1'] for w in hdr_above if w['text'].lower() in ('ra', 'rút', 'debit', 'withdrawal') and w['x0'] > 0.45 * W0], default=0.674 * W0)
-    x1_gui = max([w['x1'] for w in hdr_above if w['text'].lower() in ('vào', 'gửi', 'credit', 'deposit') and w['x0'] > x1_rut], default=0.805 * W0)
-    x1_du = max([w['x1'] for w in hdr_above if w['text'].lower() in ('dư', 'balance') and w['x0'] > x1_gui], default=0.935 * W0)
-
-    money_min_x1 = x1_rut - 0.05 * W0
-    mid_rut_gui = (x1_rut + x1_gui) / 2
-    mid_gui_du = (x1_gui + x1_du) / 2
-
-    stt_counter = 0
-    for pi, page in enumerate(pdf.pages):
-        W, H = page.width, page.height
-        words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
-        for w in words:
-            w['text'] = unicodedata.normalize("NFC", w['text'])
-
-        table_top = p0_table_top if pi == 0 else 0.015 * H
-
-        footer_tops = [
-            w['top'] for w in words
-            if (w['text'].upper() in ('NGÂN', 'ASIA') and w['x0'] > 0.50 * W)
-            or (w['text'] == '/' and w['top'] > 0.90 * H)
-        ]
-        table_bottom = min(footer_tops) - 4 if footer_tops else H - 0.03 * H
-        twords = [w for w in words if table_top <= w['top'] < table_bottom]
-
-        scale = W / W0 if W0 else 1.0
-        cur_money_min_x1 = money_min_x1 * scale
-        cur_mid_rg = mid_rut_gui * scale
-        cur_mid_gd = mid_gui_du * scale
-
-        raw_anchors = sorted(
-            [w for w in twords if w['x0'] < 0.13 * W and _ACB_DATE_RE.match(w['text'])],
-            key=lambda w: (w['top'], w['x0'])
-        )
-        anchors = []
-        for a in raw_anchors:
-            if not anchors or abs(a['top'] - anchors[-1]['top']) >= 0.012 * H:
-                anchors.append(a)
-        if not anchors:
-            continue
-
-        raw_shapes = [
-            s for s in (list(page.rects) + list(page.curves))
-            if s['width'] > 0.65 * W and 0.015 * H < s['height'] < 0.25 * H
-            and s['top'] >= table_top - 4 and s['bottom'] <= table_bottom + 4
-        ]
-        bg_shapes = []
-        for s in sorted(raw_shapes, key=lambda x: x['top']):
-            if not bg_shapes or abs(s['top'] - bg_shapes[-1]['top']) > 4:
-                bg_shapes.append(s)
-
-        row_spans = []
-        if len(bg_shapes) >= max(1, len(anchors) // 3):
-            for i, a in enumerate(anchors):
-                ay = (a['top'] + a['bottom']) / 2
-                inside = next((s for s in bg_shapes if (s['top'] - 2) <= ay <= (s['bottom'] + 2)), None)
-                if inside:
-                    y_s, y_e = inside['top'] - 1, inside['bottom'] + 1
-                else:
-                    above = [s for s in bg_shapes if s['bottom'] <= ay + 2]
-                    below = [s for s in bg_shapes if s['top'] >= ay - 2]
-                    y_s = (above[-1]['bottom'] - 1) if above else table_top
-                    y_e = (below[0]['top'] + 1) if below else table_bottom
-                row_spans.append((y_s, y_e))
-        else:
-            cuts = [table_top]
-            for i in range(len(anchors) - 1):
-                y_a, y_b = anchors[i]['top'], anchors[i + 1]['top']
-                desc_w = [w for w in twords if (y_a - 2) <= w['top'] <= (y_b + 2) and 0.26 * W <= w['x0'] < (x1_rut * scale - 0.09 * W)]
-                y_lines = []
-                for y in sorted(set(round(w['top'], 1) for w in desc_w)):
-                    if not y_lines or y - y_lines[-1] > 3.5:
-                        y_lines.append(y)
-                if len(y_lines) >= 2:
-                    max_gap, best_cut = -1, (y_a + y_b) / 2
-                    for k in range(len(y_lines) - 1):
-                        if y_lines[k + 1] - y_lines[k] > max_gap:
-                            max_gap = y_lines[k + 1] - y_lines[k]
-                            best_cut = (y_lines[k] + y_lines[k + 1]) / 2
-                    cuts.append(best_cut)
-                else:
-                    cuts.append((y_a + y_b) / 2)
-            cuts.append(table_bottom)
-            row_spans = [(cuts[i], cuts[i + 1]) for i in range(len(anchors))]
-
-        for i in range(len(anchors)):
-            y_start, y_end = row_spans[i]
-            row_words = [w for w in twords if y_start <= w['top'] < y_end]
-            hl_parts, gd_parts, mota_parts = [], [], []
-            no_val, co_val, sodu_val = "0", "0", ""
-
-            for w in sorted(row_words, key=lambda x: (round(x['top']), x['x0'])):
-                txt = w['text']
-                if w['x0'] < 0.13 * W:
-                    hl_parts.append(txt)
-                elif w['x0'] < 0.215 * W:
-                    gd_parts.append(txt)
-                elif w['x0'] < 0.265 * W and re.match(r'^\d{1,6}$', txt):
-                    continue
-                elif w['x1'] >= cur_money_min_x1 and _ACB_MONEY_RE.match(txt):
-                    if w['x1'] <= cur_mid_rg:
-                        no_val = _vn_money_to_std_str(txt)
-                    elif w['x1'] <= cur_mid_gd:
-                        co_val = _vn_money_to_std_str(txt)
-                    else:
-                        sodu_val = _vn_money_to_std_str(txt)
-                else:
-                    mota_parts.append(txt)
-
-            stt_counter += 1
-            ngay_gd_str = " ".join(gd_parts)
-            ngay_hl_str = " ".join(hl_parts)
-            ngay_chuan = normalize_date_ddmmyyyy(ngay_gd_str or ngay_hl_str)
-
+    all_rows = []
+    for page in pdf.pages:
+        for r in _acb_page_rows(page):
+            stt = len(all_rows) + 1
+            ngay_chinh = r['hieu_luc'] if ACB_NGAY_CHINH == "hieu_luc" else r['giao_dich']
             all_rows.append({
-                'STT': str(stt_counter),
-                'Ngay': ngay_chuan,
-                'MoTa': " ".join(mota_parts).strip(),
-                'No': no_val,
-                'Co': co_val,
-                'SoDu': sodu_val,
+                'STT': str(stt),
+                'Ngay': normalize_date_ddmmyyyy(ngay_chinh),
+                'MoTa': r['noi_dung'],
+                'No': r['no'] or "0",
+                'Co': r['co'] or "0",
+                'SoDu': r['so_du'],
             })
 
     return {
         'header_info': header_info, 'rows': all_rows,
-        'beginning_balance': beginning_balance, 'ending_balance': ending_balance,
-        'total_debit': total_debit, 'total_credit': total_credit,
+        'beginning_balance': hdr.get('beginning'), 'ending_balance': hdr.get('ending'),
+        'total_debit': hdr.get('total_debit'), 'total_credit': hdr.get('total_credit'),
     }
 
 
@@ -1316,11 +1322,22 @@ def process_files():
                 "status": status
             })
 
+            preview_rows = []
+            for r in res['rows']:
+                no_v = to_num(r['No'])
+                co_v = to_num(r['Co'])
+                preview_rows.append({
+                    "Ngay": r['Ngay'],
+                    "No": f"{no_v:,.0f}" if no_v != 0 else "0",
+                    "Co": f"{co_v:,.0f}" if co_v != 0 else "0",
+                    "MoTa": r['MoTa']
+                })
+
             sheets.append({
                 "file": res['source_file'],
                 "bank": str(res['bank']).upper(),
                 "account": hi.get('account_no', ''),
-                "rows": res['rows']
+                "rows": preview_rows
             })
 
     return jsonify({"summary": summary, "sheets": sheets, "file_b64": b64_data})
