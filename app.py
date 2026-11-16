@@ -4,9 +4,14 @@ CONG CU TRICH XUAT SAO KE NGAN HANG
 - PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB, MBBank
 - HTML: VPBank (T24 Core)
 - Excel/CSV: Sacombank, Agribank IPCAS, Excel khac
-- Dinh dang ngay: dd/mm/yyyy
-- Ket xuat 4 cot & Ket xuat cho ASP (1111, 6422, 131, 331, 515)
-- Ho tro nap & luu Danh sach Khach hang / Nha cung cap theo tung cong ty de ghep Ma doi tuong chuan xac.
+- Dinh dang ngay chuan: dd/mm/yyyy
+- Ket xuat 4 cot & Ket xuat cho ASP:
+  + 515: Lai tien gui (MaDT trong)
+  + 6422: Phi ngan hang / chuyen tien (MaDT = ten ngan hang: acb, agribank, bidv, vietinbank, lpbank, mbbank, vpbank, sacombank)
+  + 1111: Nop/Rut tien mat, Rut/Chi sec, Nguoi noi bo chuyen tien (MaDT trong)
+  + 131: Khach tra tien (MaDT theo danh ba KH cua cong ty)
+  + 331: Tra tien NCC (MaDT theo danh ba NCC cua cong ty)
+  + Thu goc/lai/lai phat/phi vay, Thue, BHXH, Noi bo, Luong... -> De trong
 """
 import csv
 from html.parser import HTMLParser
@@ -719,7 +724,6 @@ def _read_tabular_light(path):
 
 
 def parse_partner_excel(path):
-    """Doc file Danh sach khach hang / Danh sach nha cung cap (.xlsx, .xls, .csv)"""
     rows = _read_tabular_light(path)
     if not rows:
         raise ValueError("File danh sách trống hoặc không đọc được")
@@ -757,7 +761,6 @@ def parse_partner_excel(path):
             continue
         if strip_accents(code).lower() in ("tong", "total", "cong"):
             continue
-        # Bo qua neu trung lap hoan toan
         key = (code.lower(), name.lower())
         if key in seen_codes:
             continue
@@ -856,7 +859,7 @@ def extract_excel_or_csv(path):
 
 
 # =========================================================================
-#  4. BO NHAN DIEN TAI KHOAN DOI UNG & GHEP MA DOI TUONG TU DANH BA + TU DIEN
+#  4. BO NHAN DIEN TAI KHOAN DOI UNG & GHEP MA DOI TUONG CHO ASP
 # =========================================================================
 _PARTNER_ALIASES = [
     ("loc hoang", "lochoang"), ("lan hien", "lanhien"), ("thinh hien", "thinhhien"),
@@ -921,6 +924,9 @@ _LEGAL_PREFIX_WORDS = {
     "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc"
 }
 
+# Danh sach nguoi noi bo mac dinh (neu chuyen tien/nop tien vao TK cong ty -> 1111)
+_DEFAULT_INTERNAL_PEOPLE = {"nguyen van lan"}
+
 def _owner_code_candidates(owner_name):
     if not owner_name:
         return set()
@@ -940,7 +946,6 @@ def _owner_code_candidates(owner_name):
     return cands
 
 def _normalize_partner_search_variants(name):
-    """Tao cac cum tu khoa tim kiem tu Ten khach hang / NCC trong danh ba"""
     norm = strip_accents(name).lower()
     norm = re.sub(r'[^a-z0-9\s]', ' ', norm)
     norm = re.sub(r'\s+', ' ', norm).strip()
@@ -948,7 +953,6 @@ def _normalize_partner_search_variants(name):
     variants = []
     if len(words) >= 2:
         variants.append((norm, len(norm) + 20))
-    # Rut gon tien to phap ly ("cong ty tnhh tu van dau tu...") nhung giu lai it nhat 2 tu cuoi
     core_words = []
     for idx, w in enumerate(words):
         if w in _LEGAL_PREFIX_WORDS and (len(words) - idx) > 2:
@@ -957,7 +961,6 @@ def _normalize_partner_search_variants(name):
     core = " ".join(core_words).strip()
     if core and len(core) >= 4:
         variants.append((core, len(core) + 10))
-    # Neu core van con "xd va tm an phu" -> thu lay 2-3 tu cuoi neu du dai
     if len(core_words) >= 3:
         tail2 = " ".join(core_words[-2:])
         if len(tail2) >= 5:
@@ -968,13 +971,11 @@ def _normalize_partner_search_variants(name):
     return variants
 
 def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands):
-    """Tim Ma doi tuong khop nhat trong danh sach KH/NCC da luu cua cong ty"""
     if not partner_list:
         return None
     best_code = None
     best_score = -1
 
-    # Loai ten chu tai khoan khoi van ban tim kiem
     masked = " " + search_text_norm + " "
     for oc in sorted(owner_cands, key=len, reverse=True):
         if len(oc) >= 4:
@@ -987,15 +988,12 @@ def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands)
         if not code or not name:
             continue
 
-        # 1. Khop Ma so thue (>= 10 so) -> chinh xac 100%
         if len(mst) >= 10 and mst in raw_text:
             return code
 
-        # 2. Khop theo ten
         for variant, base_score in _normalize_partner_search_variants(name):
             if variant in owner_cands:
                 continue
-            # Dung ranh gioi tu \b de tranh khop nham tu con
             if re.search(r'(?<![a-z0-9])' + re.escape(variant) + r'(?![a-z0-9])', masked):
                 if base_score > best_score:
                     best_score = base_score
@@ -1009,7 +1007,6 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
     norm_combined = re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())
     norm_combined = re.sub(r'\s+', ' ', norm_combined).strip()
 
-    # 1. UU TIEN CAO NHAT: Tim trong Danh sach Khach hang / Nha cung cap da nap cua cong ty
     if preferred_list:
         matched = _match_from_directory(norm_combined, raw_combined, preferred_list, owner_cands)
         if matched:
@@ -1019,7 +1016,6 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
         if matched:
             return matched
 
-    # 2. Tim trong cot DoiTac (VietinBank / LPBank / MBBank)
     doitac_clean = strip_accents(doitac or "").lower()
     if doitac_clean and "tien mat" not in doitac_clean and "tai don vi" not in doitac_clean:
         dt_main = re.split(r'\s*[–\-]\s*a/c:|a/c:', doitac_clean)[0].strip()
@@ -1033,7 +1029,6 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
             if cand_code not in owner_cands and len(cand_code) >= 3:
                 return cand_code
 
-    # 3. Tim theo tu dien mac dinh trong noi dung MoTa
     desc_clean = strip_accents(mota or "").lower()
     desc_clean = re.sub(r'[_\-;,/]+', ' ', desc_clean)
     desc_masked = desc_clean
@@ -1045,7 +1040,6 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
         if kw in desc_masked and kw not in owner_cands and code not in owner_cands:
             return code
 
-    # 4. Tu tach ten cong ty sau "cty" / "cong ty"
     m_cty = re.search(r'(?:cong ty|cty)\s+(?:tnhh|cp|co phan|tm|dv|sx|xd|tmdv|xnk|\s)*([a-z0-9\s]{3,35})', desc_masked)
     if m_cty:
         words = [w for w in m_cty.group(1).split() if w not in _STOP_WORDS_NAME and not re.match(r'^\d{4,}$', w)]
@@ -1057,7 +1051,19 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
     return ""
 
 
-def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
+def _resolve_bank_partner_code(bank_key, source_file=""):
+    known = {"acb", "agribank", "bidv", "vietinbank", "lpbank", "mbbank", "vpbank", "sacombank"}
+    bk = str(bank_key or "").strip().lower()
+    if bk in known:
+        return bk
+    fn = strip_accents(source_file).lower()
+    for b in known:
+        if b in fn:
+            return b
+    return ""
+
+
+def classify_for_asp(row, owner_name="", customers=None, suppliers=None, bank_code="", internal_people=None):
     no_val = to_num(row.get('No'))
     co_val = to_num(row.get('Co'))
     mota = row.get('MoTa', '')
@@ -1068,7 +1074,19 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
     dt_txt = strip_accents(doitac).lower()
     combined = f"{txt} {dt_txt}"
 
-    # 1. LAI TIEN GUI (TK 515)
+    # 0. CAC KHOAN VAY / THUE / BHXH / NOI BO / LUONG -> DE TRONG ""
+    # Chay TRUOC bo loc phi 6422 de "Thu goc: ... Thu lai: ... Thu phi: VND" khong bi bat nham vao 6422!
+    other_non_keywords = (
+        "thu goc", "thu lai", "thu lai phat", "khe uoc", "tra von vay", "tra lai vay",
+        "loan repayment", "thau chi", "dong goc lai", "giai ngan",
+        "nop thue", "thue thu nhap", "thue dien tu", "cham nop thue", "kho bac", "kbnn", "kb:1327",
+        "bhxh", "bao hiem", "chuyen noi bo", "chi luong",
+        "ve duong", "vetc", "chuyen tra lai tien", "nop nham", "giao dich nham"
+    )
+    if any(k in combined for k in other_non_keywords):
+        return "", ""
+
+    # 1. LAI TIEN GUI (TK 515) - MaDT de trong
     if co_val > 0 and no_val == 0:
         if (magd == "IIPD" or any(k in combined for k in (
             "lai nhap von", "but toan tra lai", "tra lai tai khoan", "tra lai tien gui",
@@ -1076,7 +1094,7 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
         )) or re.match(r'^tra lai\b', txt.strip())):
             return "515", ""
 
-    # 2. PHI NGAN HANG / PHI CHUYEN TIEN (TK 6422)
+    # 2. PHI NGAN HANG / PHI CHUYEN TIEN (TK 6422) -> MaDT = ten ngan hang (acb, agribank, bidv...)
     if no_val > 0 and co_val == 0:
         is_fee = False
         if magd == "DDM" or magd.startswith("CHG"):
@@ -1093,22 +1111,24 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
             is_fee = True
 
         if is_fee:
-            return "6422", ""
+            return "6422", bank_code
 
-    # 3. CAC KHOAN KHONG GAN VAO 1111/131/331 (Thue, BHXH, Vay, Noi bo, Luong...) -> DE TRONG
-    other_non_keywords = (
-        "nop thue", "thue thu nhap", "thue dien tu", "cham nop thue", "kho bac", "kbnn", "kb:1327",
-        "bhxh", "bao hiem", "khe uoc", "thu goc", "thu lai", "tra von vay", "tra lai vay",
-        "loan repayment", "thau chi", "dong goc lai", "giai ngan", "chuyen noi bo",
-        "chi luong", "ve duong", "vetc", "tra lai tien", "nop nham", "giao dich nham"
+    # 3. NOP / RUT TIEN MAT, RUT / CHI SEC, NGUOI NOI BO CHUYEN TIEN (TK 1111) -> MaDT de trong
+    internal_set = set(_DEFAULT_INTERNAL_PEOPLE)
+    if internal_people:
+        for p_name in internal_people:
+            p_clean = re.sub(r'\s+', ' ', strip_accents(p_name).lower()).strip()
+            if len(p_clean) >= 3:
+                internal_set.add(p_clean)
+
+    is_internal_person = any(
+        re.search(r'(?<![a-z0-9])' + re.escape(pname) + r'(?![a-z0-9])', combined)
+        for pname in internal_set
     )
-    if any(k in combined for k in other_non_keywords):
-        return "", ""
 
-    # 4. NOP / RUT TIEN MAT, RUT / CHI SEC (TK 1111)
-    # Bao gom ca "CT nhanh 247 den: TRAN VAN TRUONG NOP TIEN" theo quy uoc cua nguoi dung
     is_cash_or_cheque = (
         "tien mat, vang tien te tai don vi" in dt_txt
+        or is_internal_person
         or any(k in combined for k in (
             "nop tien", "rut tien", "rut sec", "chi sec", "linh tien",
             "nt vao tk", "nop tm", "nt-tk-acb", "nop tien mat"
@@ -1119,7 +1139,7 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
     if is_cash_or_cheque:
         return "1111", ""
 
-    # 5. KHACH TRA TIEN (TK 131) -> CO > 0
+    # 4. KHACH TRA TIEN (TK 131) -> CO > 0
     if co_val > 0 and no_val == 0:
         ma_dt = _extract_partner_code(mota, doitac, owner_name, preferred_list=customers, secondary_list=suppliers)
         is_customer_pay = (
@@ -1135,7 +1155,7 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None):
         if is_customer_pay:
             return "131", ma_dt
 
-    # 6. TRA TIEN NHA CUNG CAP (TK 331) -> NO > 0
+    # 5. TRA TIEN NHA CUNG CAP (TK 331) -> NO > 0
     if no_val > 0 and co_val == 0:
         ma_dt = _extract_partner_code(mota, doitac, owner_name, preferred_list=suppliers, secondary_list=customers)
         is_supplier_pay = (
@@ -1342,7 +1362,6 @@ HTML_UI = r"""<!DOCTYPE html>
         h1 { color: #4b659e; margin: 0 0 8px 0; font-size: 25px; letter-spacing: -0.3px; }
         .subtitle { color: #6b768c; font-size: 14px; margin-bottom: 20px; line-height: 1.6; }
 
-        /* KHUNG DANH BA CONG TY */
         .partner-card {
             background: linear-gradient(180deg, #faf7ff 0%, #f4f7ff 100%);
             border: 1.5px solid #e1dbf7;
@@ -1358,12 +1377,7 @@ HTML_UI = r"""<!DOCTYPE html>
             gap: 10px;
             margin-bottom: 12px;
         }
-        .partner-row {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
+        .partner-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
         select {
             padding: 9px 12px;
             border: 1.5px solid #d5ddf0;
@@ -1383,11 +1397,7 @@ HTML_UI = r"""<!DOCTYPE html>
             color: #1f704b;
             border: 1px solid #bfead3;
         }
-        .badge-empty {
-            background: #f5f6fa;
-            color: #7c879c;
-            border-color: #e0e4ee;
-        }
+        .badge-empty { background: #f5f6fa; color: #7c879c; border-color: #e0e4ee; }
 
         .upload-zone {
             border: 2.5px dashed #9cb8f3;
@@ -1402,17 +1412,16 @@ HTML_UI = r"""<!DOCTYPE html>
         .upload-zone:hover { background: #e9f1ff; border-color: #779be8; transform: translateY(-1px); }
         .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
         input[type="password"], input[type="text"] {
-            padding: 11px 14px;
+            padding: 10px 14px;
             border: 1.5px solid #d9e2f2;
             border-radius: 10px;
-            font-size: 14px;
+            font-size: 13.5px;
             background: #fbfcff;
             color: #3d485c;
             outline: none;
         }
         input:focus { border-color: #8eb0f2; }
 
-        /* NUT BAM HIEU UNG NOI 3D PASTEL */
         .btn {
             padding: 10px 20px;
             border: none;
@@ -1542,10 +1551,9 @@ HTML_UI = r"""<!DOCTYPE html>
     <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
     <div class="subtitle">
         Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • 2 mẫu kết xuất: <b>Mẫu 4 cột</b> và <b>Kết xuất cho ASP</b> (tự phân loại <code>1111</code>, <code>6422</code>, <code>131</code>, <code>331</code>, <code>515</code> &amp; ghép <code>Mã đối tượng</code> từ danh bạ công ty).
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • 2 mẫu kết xuất: <b>Mẫu 4 cột</b> và <b>Kết xuất cho ASP</b> (tự phân loại <code>1111</code>, <code>6422</code>, <code>131</code>, <code>331</code>, <code>515</code> &amp; <code>Mã đối tượng</code>).
     </div>
 
-    <!-- KHU VUC QUAN LY DANH SACH KHACH HANG / NHA CUNG CAP THEO CONG TY -->
     <div class="partner-card">
         <div class="partner-header">
             <div style="font-weight: 700; color: #574699; font-size: 15px;">
@@ -1565,7 +1573,7 @@ HTML_UI = r"""<!DOCTYPE html>
             <button class="btn btn-peach btn-sm" onclick="deleteCompany()">🗑️ Xóa công ty</button>
         </div>
 
-        <div class="partner-row">
+        <div class="partner-row" style="margin-bottom: 12px;">
             <input type="file" id="upKhFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', this)">
             <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upKhFile')">📥 Nạp DS Khách hàng (.xlsx)</button>
             <span id="khStatus" class="badge-count badge-empty">0 Khách hàng</span>
@@ -1573,6 +1581,11 @@ HTML_UI = r"""<!DOCTYPE html>
             <input type="file" id="upNccFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', this)">
             <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upNccFile')">📥 Nạp DS Nhà cung cấp (.xlsx)</button>
             <span id="nccStatus" class="badge-count badge-empty">0 Nhà cung cấp</span>
+        </div>
+
+        <div class="partner-row">
+            <label style="font-weight: 600; font-size: 13px;">👤 Người nộp/chuyển nội bộ (tự gán 1111):</label>
+            <input type="text" id="internalPeopleInput" style="flex: 1; min-width: 280px;" placeholder="VD: Nguyễn Văn Lân, Nguyễn Thị Thủy, Trần Văn Trường..." onchange="saveInternalPeople()">
         </div>
     </div>
 
@@ -1675,9 +1688,11 @@ function updateStatusBadges() {
     const comp = db.companies[db.activeCompany];
     const khEl = document.getElementById('khStatus');
     const nccEl = document.getElementById('nccStatus');
+    const intEl = document.getElementById('internalPeopleInput');
     if (!comp) {
         khEl.innerText = '0 Khách hàng'; khEl.className = 'badge-count badge-empty';
         nccEl.innerText = '0 Nhà cung cấp'; nccEl.className = 'badge-count badge-empty';
+        intEl.value = '';
         return;
     }
     const khCnt = (comp.customers || []).length;
@@ -1686,10 +1701,25 @@ function updateStatusBadges() {
     khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
     nccEl.innerText = `${nccCnt} Nhà cung cấp`;
     nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+    intEl.value = (comp.internalPeople || []).join(', ');
 }
 
 function onSelectCompany() {
     db.activeCompany = document.getElementById('companySelect').value;
+    saveDB();
+}
+
+function saveInternalPeople() {
+    const val = document.getElementById('internalPeopleInput').value;
+    if (!db.activeCompany) {
+        if (!val.trim()) return;
+        const name = prompt('Bạn chưa chọn công ty. Nhập tên Công ty muốn lưu danh sách người nội bộ này:');
+        if (!name || !name.trim()) return;
+        const cleanName = name.trim();
+        if (!db.companies[cleanName]) db.companies[cleanName] = { customers: [], suppliers: [], internalPeople: [] };
+        db.activeCompany = cleanName;
+    }
+    db.companies[db.activeCompany].internalPeople = val.split(',').map(x => x.trim()).filter(Boolean);
     saveDB();
 }
 
@@ -1698,7 +1728,7 @@ function addCompany() {
     if (!name || !name.trim()) return;
     const cleanName = name.trim();
     if (!db.companies[cleanName]) {
-        db.companies[cleanName] = { customers: [], suppliers: [] };
+        db.companies[cleanName] = { customers: [], suppliers: [], internalPeople: [] };
     }
     db.activeCompany = cleanName;
     saveDB();
@@ -1717,7 +1747,7 @@ function triggerPartnerUpload(inputId) {
         const name = prompt('Bạn chưa chọn công ty. Nhập tên Công ty muốn lưu danh sách này:');
         if (!name || !name.trim()) return;
         const cleanName = name.trim();
-        if (!db.companies[cleanName]) db.companies[cleanName] = { customers: [], suppliers: [] };
+        if (!db.companies[cleanName]) db.companies[cleanName] = { customers: [], suppliers: [], internalPeople: [] };
         db.activeCompany = cleanName;
         saveDB();
     }
@@ -1785,7 +1815,12 @@ async function uploadAndProcess() {
     const inp = document.getElementById('files');
     if (!inp.files.length) { alert('Vui lòng chọn ít nhất 1 file sao kê!'); return; }
 
-    const activeComp = db.companies[db.activeCompany] || { customers: [], suppliers: [] };
+    const activeComp = db.companies[db.activeCompany] || { customers: [], suppliers: [], internalPeople: [] };
+    const rawInt = document.getElementById('internalPeopleInput').value;
+    if (rawInt.trim() && (!activeComp.internalPeople || !activeComp.internalPeople.length)) {
+        activeComp.internalPeople = rawInt.split(',').map(x => x.trim()).filter(Boolean);
+    }
+
     const formData = new FormData();
     for (let f of inp.files) formData.append('files', f);
     formData.append('password', document.getElementById('pwd').value);
@@ -1988,6 +2023,7 @@ def process_files():
         partners_obj = {}
     customers = partners_obj.get("customers", [])
     suppliers = partners_obj.get("suppliers", [])
+    internal_people = partners_obj.get("internalPeople", [])
 
     if not uploaded:
         return jsonify({"error": "Không có file nào được tải lên"}), 400
@@ -2005,6 +2041,7 @@ def process_files():
             warns = [] if res.get('loi') else validate(res)
             hi = res.get('header_info', {})
             owner_name = hi.get('customer') or hi.get('account_name') or ''
+            bank_code = _resolve_bank_partner_code(res.get('bank'), res.get('source_file', ''))
 
             t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
             t_cred = to_num(res['total_credit']) if res.get('total_credit') else sum(to_num(x['Co']) for x in res['rows'])
@@ -2028,7 +2065,8 @@ def process_files():
                 no_v = to_num(r['No'])
                 co_v = to_num(r['Co'])
                 tk_doi_ung, ma_dt = classify_for_asp(
-                    r, owner_name=owner_name, customers=customers, suppliers=suppliers
+                    r, owner_name=owner_name, customers=customers, suppliers=suppliers,
+                    bank_code=bank_code, internal_people=internal_people
                 )
                 preview_rows.append({
                     "Ngay": r['Ngay'],
