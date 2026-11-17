@@ -2,10 +2,10 @@
 """
 CONG CU TRICH XUAT SAO KE NGAN HANG
 - PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB, MBBank,
-       Vietcombank (ca mau VCB - iB@nking co ke o, mau Sao ke khong ke o, va So phu Giay bao No/Co)
+       Vietcombank (VCB - iB@nking co ke o, Sao ke khong ke o, va So phu Giay bao No/Co)
 - HTML: VPBank (T24 Core)
 - Excel/CSV: Sacombank, Agribank IPCAS, Excel khac
-- Ho tro tai file .zip So phu kem Sao ke de tu dong ghep Ten & So TK nguoi huong / nguoi chuyen.
+- Ho tro tai file .zip So phu (ghep vao Sao ke hoac tu tong hop thanh bang giao dich neu chi tai So phu)
 - Dinh dang ngay chuan: dd/mm/yyyy
 """
 import base64
@@ -361,7 +361,7 @@ def detect_bank(text):
         return "mbbank"
     if "GIẤY BÁO NỢ - DEBIT ADVICE" in t or "GIẤY BÁO CÓ - CREDIT ADVICE" in t or "SỔ HẠCH TOÁN CHI TIẾT" in t:
         return "vcb_sophu"
-    if ("www.vietcombank.com.vn" in t or "VIETCOMBANK" in t.upper()):
+    if "www.vietcombank.com.vn" in t or "VIETCOMBANK" in t.upper():
         if "VCB - iB@nking" in t or "Nội dung chi tiết" in t or "Transaction In Detail" in t:
             return "vietcombank_vcb2"
         if "Số tham chiếu" in t or "Số tiền ghi nợ" in t:
@@ -791,24 +791,41 @@ def extract_mbbank(pdf):
 
 
 # =========================================================================
-#  3F. VIETCOMBANK PDF (3 DINH DANG: MAU 1 KHONG KE O + MAU 2 iB@nking + SO PHU)
+#  3F. VIETCOMBANK PDF (SO PHU GIAY BAO NO/CO + SAO KE MAU 1 & MAU 2)
 # =========================================================================
 def _normalize_doc_no(s):
-    """Chuan hoa So CT/Tham chieu Vietcombank: '5224 - 77541' / '021026.5224.77541' -> '5224-77541'"""
     if not s:
         return ""
     s = str(s).strip()
-    m_full = re.search(r'(\d{4})[.\-\s]+(\d{4,10})$', s)
+    m_full = re.search(r'(\d{4})[.\-\s]+(\d{4,12})$', s)
     if m_full:
         return f"{m_full.group(1)}-{m_full.group(2)}"
     return re.sub(r'\s+', '', s)
 
 
 def parse_vcb_sophu_advices(pdf):
-    """Doc cac trang GIAY BAO NO / GIAY BAO CO trong file PDF So phu Vietcombank"""
+    """Doc tung trang Giay bao No / Giay bao Co trong So phu Vietcombank (xu ly chuan bang 2 cot hoac 4 cot)"""
     advices = []
+    owner_name_top = ""
+    owner_acc_top = ""
+
     for page in pdf.pages:
         text = unicodedata.normalize("NFC", page.extract_text() or "")
+
+        # Lay thong tin chu TK tu trang So hach toan chi tiet (trang 1)
+        if "SỔ HẠCH TOÁN CHI TIẾT" in text or "DETAILED ACCOUNT BOOK" in text:
+            m_acc = re.search(r'Tài khoản\s*/\s*Account\s*:\s*(\S+)', text)
+            if m_acc: owner_acc_top = m_acc.group(1).strip()
+            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            for i, ln in enumerate(lines):
+                if "CIF" in ln and i + 1 < len(lines) and "Địa chỉ" not in lines[i + 1]:
+                    cand_name = lines[i + 1]
+                    if i + 2 < len(lines) and "Địa chỉ" not in lines[i + 2] and len(lines[i + 2]) < 15:
+                        cand_name += " " + lines[i + 2]
+                    owner_name_top = cand_name.strip()
+                    break
+            continue
+
         is_debit = ("GIẤY BÁO NỢ" in text or "DEBIT ADVICE" in text)
         is_credit = ("GIẤY BÁO CÓ" in text or "CREDIT ADVICE" in text)
         if not (is_debit or is_credit):
@@ -824,41 +841,63 @@ def parse_vcb_sophu_advices(pdf):
         m_det = re.search(r'Nội dung\s*/\s*Details\s*:\s*(.*)', text)
         details = m_det.group(1).strip() if m_det else ""
 
-        # Doc bang 2 ben (Nguoi ra lenh | Nguoi huong)
-        ord_name = ord_acc = ben_name = ben_acc = amt_str = ""
+        ord_name = ord_acc = ord_mst = ""
+        ben_name = ben_acc = ben_mst = ""
+        amt_debit_str = amt_credit_str = ""
+
+        def _extract_val(cell_text):
+            if ":" in cell_text:
+                return cell_text.split(":", 1)[1].strip()
+            return ""
+
         for table in page.extract_tables():
             for row in table:
                 cells = [re.sub(r'\s+', ' ', (c or "").replace("\n", " ")).strip() for c in row]
-                if len(cells) >= 4:
-                    left_lbl, left_val, right_lbl, right_val = cells[0], cells[1], cells[2], cells[3]
-                    lval = left_val.lstrip(":").strip()
-                    rval = right_val.lstrip(":").strip()
-                    if "Họ tên" in left_lbl or "A/C Name" in left_lbl:
-                        ord_name = lval
-                    if "Số TK" in left_lbl or "A/C No" in left_lbl:
-                        ord_acc = lval
-                    if "Họ tên" in right_lbl or "A/C Name" in right_lbl:
-                        ben_name = rval
-                    if "Số TK" in right_lbl or "A/C No" in right_lbl:
-                        ben_acc = rval
-                    if "Số tiền nợ" in left_lbl or "Debit Amount" in left_lbl:
-                        amt_str = lval
-                    if not amt_str and ("Số tiền có" in right_lbl or "Credit Amount" in right_lbl):
-                        amt_str = rval
+                if len(cells) < 2:
+                    continue
+                mid = len(cells) // 2
+                left_str = " ".join(cells[:mid]).strip()
+                right_str = " ".join(cells[mid:]).strip()
 
-        owner_acc = ord_acc if direction == "out" else ben_acc
+                if "Họ tên" in left_str or "A/C Name" in left_str:
+                    ord_name = _extract_val(left_str)
+                elif "Số TK" in left_str or "A/C No" in left_str:
+                    ord_acc = _extract_val(left_str)
+                elif "MST" in left_str or "ID No" in left_str:
+                    ord_mst = _extract_val(left_str)
+                elif "Số tiền nợ" in left_str or "Debit Amount" in left_str:
+                    amt_debit_str = _extract_val(left_str)
+
+                if "Họ tên" in right_str or "A/C Name" in right_str:
+                    ben_name = _extract_val(right_str)
+                elif "Số TK" in right_str or "A/C No" in right_str:
+                    ben_acc = _extract_val(right_str)
+                elif "MST" in right_str or "ID No" in right_str:
+                    ben_mst = _extract_val(right_str)
+                elif "Số tiền có" in right_str or "Credit Amount" in right_str:
+                    amt_credit_str = _extract_val(right_str)
+
+        owner_acc = (ord_acc if direction == "out" else ben_acc) or owner_acc_top
+        owner_name = (ord_name if direction == "out" else ben_name) or owner_name_top
         partner_name = ben_name if direction == "out" else ord_name
         partner_acc = ben_acc if direction == "out" else ord_acc
-        amt_num = to_num(_vcb_comma_dec_to_std_str(amt_str))
+        partner_mst = ben_mst if direction == "out" else ord_mst
+
+        amt_main_str = amt_debit_str if direction == "out" else amt_credit_str
+        amt_main = int(round(to_num(_vcb_comma_dec_to_std_str(amt_main_str))))
+        amt_alt = int(round(to_num(_vcb_comma_dec_to_std_str(amt_credit_str if direction == "out" else amt_debit_str))))
 
         advices.append({
             "owner_acc": owner_acc.strip(),
+            "owner_name": owner_name.strip(),
             "date": date_val,
             "doc_key": doc_key,
             "direction": direction,
-            "amount": int(round(amt_num)),
+            "amount": amt_main,
+            "alt_amount": amt_alt,
             "partner_name": partner_name.strip(),
             "partner_acc": partner_acc.strip(),
+            "partner_mst": partner_mst.strip(),
             "details": details
         })
     return advices
@@ -893,20 +932,16 @@ def extract_vietcombank_vcb1(pdf):
                 break
 
     p0 = pdf.pages[0]
-    W0 = p0.width
     p0_words = p0.extract_words(use_text_flow=False, keep_blank_chars=False)
 
-    # Doc So du dau ky & cuoi ky o dau trang 1 (so tien co the bi xuong dong)
     for w in p0_words:
         if w['text'] == 'đầu' and w['top'] < 320:
-            # Lay so ben phai cung hang ngang
             vals = sorted([x for x in p0_words if abs(x['top'] - w['top']) < 18 and 95 < x['x0'] < 180], key=lambda x: (round(x['top']), x['x0']))
             if vals: beginning_balance = "".join(x['text'] for x in vals)
         elif w['text'] == 'cuối' and w['top'] < 320:
             vals = sorted([x for x in p0_words if abs(x['top'] - w['top']) < 20 and 245 < x['x0'] < 330], key=lambda x: (round(x['top']), x['x0']))
             if vals: ending_balance = "".join(x['text'] for x in vals)
 
-    # Tim vi tri cac cot bang giao dich tu tieu de trang 1
     hdr_y = next((w['top'] for w in p0_words if w['text'] == 'tham' and any(w2['text'] == 'chiếu' and abs(w2['top'] - w['top']) < 4 for w2 in p0_words)), 260.0)
     hdr_band = [w for w in p0_words if (hdr_y - 14) <= w['top'] <= (hdr_y + 18)]
     p0_table_top = max([w['bottom'] for w in hdr_band], default=hdr_y + 16) + 2
@@ -916,11 +951,9 @@ def extract_vietcombank_vcb1(pdf):
     x_co_col_x0 = min([w['x0'] for w in hdr_band if w['text'] in ('có', 'ghi') and w['x0'] > 250], default=262.0)
     x_mota_start = min([w['x0'] for w in hdr_band if w['text'] == 'Mô' and w['x0'] > 300], default=322.0) - 4
 
-    # Tinh diem chia giua cot No va Co
     x1_no_hdr = max([w['x1'] for w in hdr_band if w['text'] == 'nợ' and w['x0'] > 190], default=255.0)
     x_no_end = max(x1_no_hdr + 3, (x1_no_hdr + x_co_col_x0) / 2)
 
-    # Doc Tong so o trang cuoi
     last_words = pdf.pages[-1].extract_words(use_text_flow=False, keep_blank_chars=False)
     tong_y = next((w['top'] for w in last_words if w['text'] == 'Tổng' and any(w2['text'] == 'số' and abs(w2['top'] - w['top']) < 4 for w2 in last_words)), None)
     if tong_y:
@@ -941,7 +974,6 @@ def extract_vietcombank_vcb1(pdf):
         if not anchors:
             continue
 
-        # Cat ranh gioi dong theo khe ho lon nhat o cot Mo ta (hoac rects nen xanh nhat)
         cuts = [table_top]
         for i in range(len(anchors) - 1):
             y_a, y_b = anchors[i]['top'], anchors[i + 1]['top']
@@ -985,7 +1017,6 @@ def extract_vietcombank_vcb1(pdf):
                 'MaGD': _normalize_doc_no(" ".join(c_ref)),
             })
 
-    # Mau nay xep tu ngay moi -> cu, dao nguoc lai thanh cu -> moi
     all_rows.reverse()
     for idx, r in enumerate(all_rows, start=1):
         r['STT'] = str(idx)
@@ -1010,7 +1041,6 @@ def extract_vietcombank_vcb2(pdf):
         if "Tên tài khoản" in line:
             part = line.split(":", 1)[1].split("Ngày thực hiện")[0].strip()
             if not part and i + 1 < len(lines0): part = lines0[i + 1]
-            # Neu ten cong ty bi ngat 2 dong truoc "Số tài khoản"
             if i + 1 < len(lines0) and "Số tài khoản" not in lines0[i + 1] and "Account" not in lines0[i + 1] and len(lines0[i + 1]) < 20:
                 part = (part + " " + lines0[i + 1]).strip()
             header_info['customer'] = part
@@ -1362,12 +1392,13 @@ _LEGAL_PREFIX_WORDS = {
     "cong", "ty", "cty", "ct", "tnhh", "cp", "co", "phan", "mtv", "ho", "kinh", "doanh", "hkd",
     "trach", "nhiem", "huu", "han", "tu", "van", "dau", "tu", "xay", "dung", "thuong", "mai",
     "dich", "vu", "san", "xuat", "van", "tai", "tm", "dv", "sx", "xd", "dt", "va", "dvtm",
-    "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc", "dtxd", "tvxd", "xdtm", "sxkd"
+    "tmdv", "tmxd", "xnk", "nk", "xk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc",
+    "dtxd", "tvxd", "xdtm", "sxkd"
 }
 
 _CANON_REPLACEMENTS = [
     (r'\bcong\s+ty\b', 'cty'),
-    (r'\bct\s+(?=tnhh|cp|co\s+phan|tm|dv|dt|xd|sx)', 'cty '),
+    (r'\bct\s+(?=tnhh|cp|co\s+phan|tm|dv|dt|xd|sx|dien)', 'cty '),
     (r'\bco\s+phan\b', 'cp'),
     (r'\btrach\s+nhiem\s+huu\s+han\b', 'tnhh'),
     (r'\bthuong\s+mai\b', 'tm'),
@@ -1377,7 +1408,10 @@ _CANON_REPLACEMENTS = [
     (r'\bsan\s+xuat\b', 'sx'),
     (r'\bvan\s+tai\b', 'vt'),
     (r'\bxuat\s+nhap\s+khau\b', 'xnk'),
+    (r'\bnhap\s+khau\b', 'nk'),
+    (r'\bxuat\s+khau\b', 'xk'),
     (r'\bchi\s+nhanh\b', 'cn'),
+    (r'\btong\s+cong\s+ty\b', 'tct'),
     (r'\bmtv\b', ''),
     (r'\bva\b', ''),
     (r'\btmdv\b', 'tm dv'),
@@ -1393,7 +1427,7 @@ def _canon_biz(s):
     norm = re.sub(r'\s+', ' ', norm).strip()
     for pat, rep in _CANON_REPLACEMENTS:
         norm = re.sub(pat, rep, norm)
-    norm = re.sub(r'\bcn\s+(?:tinh\s+)?(?:ninh binh|ha nam|hung yen|phu tho|ha noi|viet nam).*$', '', norm).strip()
+    norm = re.sub(r'\bcn\s+(?:tct|tinh|ninh binh|ha nam|hung yen|phu tho|ha noi|viet nam).*$', '', norm).strip()
     norm = re.sub(r'\s+', ' ', norm).strip()
     return norm
 
@@ -1475,9 +1509,11 @@ def _match_from_directory(search_text_norm, canon_text, raw_text, partner_list, 
         if not code or not name:
             continue
 
+        # 1. Khop chinh xac Ma so thue (neu co tu 10 ky tu tro len)
         if len(mst) >= 10 and mst in raw_text:
             return code
 
+        # 2. Khop chinh xac cum ten (ca ban goc va ban da chuan hoa viet tat + khong dau)
         variants, dist_tokens = _normalize_partner_search_variants(name)
         matched_exact = False
         for variant, base_score in variants:
@@ -1490,6 +1526,7 @@ def _match_from_directory(search_text_norm, canon_text, raw_text, partner_list, 
                     best_score = base_score
                     best_code = code
 
+        # 3. So khop mo theo tu phan biet
         if not matched_exact and len(dist_tokens) >= 2:
             hits = [t for t in dist_tokens if t in masked_tokens]
             ratio = len(hits) / len(dist_tokens)
@@ -1528,11 +1565,12 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
     mota = row.get('MoTa', '')
     doitac = row.get('DoiTac', '')
     doitac_acc = row.get('DoiTacAcc', '')
+    doitac_mst = row.get('DoiTacMST', '')
     magd = str(row.get('MaGD', '') or '').strip().upper()
 
     txt = strip_accents(mota).lower()
     dt_txt = strip_accents(doitac).lower()
-    combined = re.sub(r'\s+', ' ', f"{txt} {dt_txt} {doitac_acc}").strip()
+    combined = re.sub(r'\s+', ' ', f"{txt} {dt_txt} {doitac_acc} {doitac_mst}").strip()
     canon_combined = _canon_biz(combined)
 
     # -1. UU TIEN CAO NHAT: QUY LUAT DA LUU CUA RIENG CONG TY
@@ -1611,7 +1649,7 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
         return "1111", ""
 
     owner_cands = _owner_code_candidates(owner_name, owner_code=owner_code)
-    raw_combined = f"{mota} {doitac} {doitac_acc}"
+    raw_combined = f"{mota} {doitac} {doitac_acc} {doitac_mst}"
     norm_combined = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())).strip()
 
     # 4. KHACH TRA TIEN (TK 131) -> CHI TIM TRONG DANH SACH KHACH HANG CUA CONG TY DO
@@ -1663,7 +1701,6 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
 #  5. DIEU PHOI FILE + GIAI NEN .ZIP SO PHU + GHEP CHUNG TU DOI UNG
 # =========================================================================
 def _unpack_uploaded_files(uploaded_files, tmp_dir):
-    """Luu cac file tai len va tu dong giai nen neu co file .zip"""
     valid_exts = (".pdf", ".html", ".htm", ".xlsx", ".xls", ".csv")
     extracted_paths = []
     idx = 0
@@ -1735,7 +1772,6 @@ def extract_any(path, display_name=None, password=None):
         txt = (pdf.pages[0].extract_text() or "") + "\n" + (pdf.pages[-1].extract_text() or "" if len(pdf.pages) > 1 else "")
         bank = detect_bank(txt)
 
-        # Neu la file PDF So phu (Giay bao No / Giay bao Co) -> tra ve danh sach advices rieng
         if bank == "vcb_sophu":
             advices = parse_vcb_sophu_advices(pdf)
             return {'is_sophu': True, 'source_file': source_name, 'bank': 'vietcombank', 'advices': advices}
@@ -2072,7 +2108,7 @@ HTML_UI = r"""<!DOCTYPE html>
     <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
     <div class="subtitle">
         Hỗ trợ: <b>Vietcombank, VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • Có thể tải kèm <b>file .zip Sổ phụ (Giấy báo Nợ/Có)</b> để tự động ghép tên người nhận &amp; mã đối tượng.
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • Có thể tải kèm <b>file .zip Sổ phụ (Giấy báo Nợ/Có)</b> hoặc tải thẳng file Sổ phụ để tự động ghép tên, MST &amp; mã đối tượng.
     </div>
 
     <div class="partner-card">
@@ -2611,7 +2647,7 @@ async function uploadAndProcess() {
 
         const spBanner = document.getElementById('sophuBanner');
         if (data.sophu_info && data.sophu_info.total_advices > 0) {
-            spBanner.innerHTML = `📎 <b>Sổ phụ kèm theo:</b> Đã đọc <b>${data.sophu_info.total_advices}</b> chứng từ Giấy báo Nợ/Có và tự động ghép <b>${data.sophu_info.matched_rows}</b> dòng giao dịch thiếu tên người nhận/gửi!`;
+            spBanner.innerHTML = `📎 <b>Sổ phụ kèm theo:</b> Đã đọc <b>${data.sophu_info.total_advices}</b> chứng từ Giấy báo Nợ/Có và tự động ghép <b>${data.sophu_info.matched_rows}</b> dòng giao dịch!`;
             spBanner.style.display = 'block';
         } else {
             spBanner.style.display = 'none';
@@ -2746,11 +2782,12 @@ function renderPreviewRows(rows) {
         let coDisp = (r.Co && r.Co !== '0') ? r.Co : '';
 
         if (previewMode === 'asp') {
+            let dtHtml = r.DoiTac ? `<div style="font-size:11.5px;color:#5271a8;margin-top:2px;">👤 Đối ứng: <b>${r.DoiTac}</b>${r.DoiTacMST ? ' • MST: ' + r.DoiTacMST : ''}${r.DoiTacAcc ? ' • TK: ' + r.DoiTacAcc : ''}</div>` : '';
             tr.innerHTML = `
                 <td class="text-center"><b>${r.Ngay}</b></td>
                 <td class="text-right debit">${noDisp}</td>
                 <td class="text-right credit">${coDisp}</td>
-                <td>${r.MoTa}${r.DoiTac ? `<div style="font-size:11.5px;color:#5271a8;margin-top:2px;">👤 Đối ứng: <b>${r.DoiTac}</b>${r.DoiTacAcc ? ' (TK: ' + r.DoiTacAcc + ')' : ''}</div>` : ''}</td>
+                <td>${r.MoTa}${dtHtml}</td>
                 <td><input class="cell-input tk-badge" value="${r.TK || ''}" onchange="updateRowField(${origIdx}, 'TK', this.value)" placeholder="Trống"></td>
                 <td><input class="cell-input" list="partnerDatalist" value="${r.MaDT || ''}" onchange="updateRowField(${origIdx}, 'MaDT', this.value)" placeholder="Trống"></td>
                 <td class="text-center"><button class="btn btn-soft btn-xs" onclick="openSaveRuleModal(${origIdx})" title="Lưu quy luật cho các dòng giống vậy và các lần sau">💾 Lưu</button></td>
@@ -2829,7 +2866,7 @@ async function confirmSaveRule() {
     allSheetsData.forEach(sheet => {
         if ((sheet.company_code || selectedCompanyCode) !== ruleTargetCompCode) return;
         sheet.rows.forEach(r => {
-            const rowText = normalizeForMatch((r.MoTa || '') + ' ' + (r.DoiTac || '') + ' ' + (r.DoiTacAcc || ''));
+            const rowText = normalizeForMatch((r.MoTa || '') + ' ' + (r.DoiTac || '') + ' ' + (r.DoiTacAcc || '') + ' ' + (r.DoiTacMST || ''));
             const rowDir = (r.Co && r.Co !== '0') ? 'in' : 'out';
             if (rowText.includes(kwNorm) && (isOwner || dir === 'both' || dir === rowDir)) {
                 r.TK = isOwner ? '1111' : tk;
@@ -2933,6 +2970,7 @@ def process_files():
         extracted_list = []
         advice_by_doc = {}
         advice_by_amt = {}
+        advices_by_acc = {}
         total_advices = 0
 
         for disp_name, fpath in all_files:
@@ -2941,14 +2979,51 @@ def process_files():
                 for adv in res.get('advices', []):
                     total_advices += 1
                     o_acc = adv['owner_acc']
+                    advices_by_acc.setdefault(o_acc, []).append(adv)
                     if adv['doc_key']:
                         advice_by_doc[(o_acc, adv['doc_key'])] = adv
                         advice_by_doc[("", adv['doc_key'])] = adv
                     if adv['date'] and adv['amount'] > 0:
                         k_amt = (o_acc, adv['date'], adv['amount'], adv['direction'])
                         advice_by_amt.setdefault(k_amt, []).append(adv)
+                        if adv.get('alt_amount') and adv['alt_amount'] != adv['amount']:
+                            advice_by_amt.setdefault((o_acc, adv['date'], adv['alt_amount'], adv['direction']), []).append(adv)
             else:
                 extracted_list.append(res)
+
+        # Neu nguoi dung CHI tai len file/zip So phu ma khong co file Sao ke rieng cho TK do -> tu dong tong hop So phu thanh bang giao dich!
+        existing_accs = {str(r.get('header_info', {}).get('account_no', '') or '').strip() for r in extracted_list}
+        for o_acc, adv_list in advices_by_acc.items():
+            if o_acc not in existing_accs and adv_list:
+                # Sap xep theo ngay tang dan
+                def _sort_key(a):
+                    parts = a['date'].split('/')
+                    return (parts[2], parts[1], parts[0], a['doc_key']) if len(parts) == 3 else ('', '', '', a['doc_key'])
+                sorted_advs = sorted(adv_list, key=_sort_key)
+                synth_rows = []
+                for idx_a, a in enumerate(sorted_advs, start=1):
+                    no_s = f"{a['amount']:,.0f}" if a['direction'] == 'out' and a['amount'] > 0 else "0"
+                    co_s = f"{a['amount']:,.0f}" if a['direction'] == 'in' and a['amount'] > 0 else "0"
+                    synth_rows.append({
+                        'STT': str(idx_a),
+                        'Ngay': a['date'],
+                        'MoTa': a['details'] or a['partner_name'],
+                        'No': no_s,
+                        'Co': co_s,
+                        'SoDu': "",
+                        'DoiTac': a['partner_name'],
+                        'DoiTacAcc': a['partner_acc'],
+                        'DoiTacMST': a['partner_mst'],
+                        'MaGD': a['doc_key']
+                    })
+                extracted_list.append({
+                    'source_file': f"SoPhu_{o_acc or 'TongHop'}.pdf",
+                    'bank': 'vietcombank',
+                    'header_info': {'account_no': o_acc, 'customer': sorted_advs[0].get('owner_name', '')},
+                    'rows': synth_rows,
+                    'beginning_balance': None, 'ending_balance': None,
+                    'total_debit': None, 'total_credit': None, 'loi': None
+                })
 
         matched_rows_cnt = 0
         summary, sheets = [], []
@@ -2989,8 +3064,7 @@ def process_files():
                 no_v = to_num(r['No'])
                 co_v = to_num(r['Co'])
 
-                # Ghep thong tin doi ung tu file .zip So phu (neu co)
-                if total_advices > 0:
+                if total_advices > 0 and not r.get('DoiTac'):
                     doc_k = _normalize_doc_no(r.get('MaGD', ''))
                     adv = advice_by_doc.get((acc_no, doc_k)) or advice_by_doc.get(("", doc_k))
                     if not adv:
@@ -3000,11 +3074,13 @@ def process_files():
                         if cand_list:
                             adv = cand_list.pop(0)
                     if adv:
-                        if adv.get('partner_name') and not r.get('DoiTac'):
+                        if adv.get('partner_name'):
                             r['DoiTac'] = adv['partner_name']
                             matched_rows_cnt += 1
                         if adv.get('partner_acc'):
                             r['DoiTacAcc'] = adv['partner_acc']
+                        if adv.get('partner_mst'):
+                            r['DoiTacMST'] = adv['partner_mst']
 
                 tk_doi_ung, ma_dt = classify_for_asp(
                     r, owner_name=owner_name, owner_code=comp_code, owner_acc=acc_no,
@@ -3018,6 +3094,7 @@ def process_files():
                     "MoTa": r['MoTa'],
                     "DoiTac": r.get('DoiTac', ''),
                     "DoiTacAcc": r.get('DoiTacAcc', ''),
+                    "DoiTacMST": r.get('DoiTacMST', ''),
                     "TK": tk_doi_ung,
                     "MaDT": ma_dt
                 })
