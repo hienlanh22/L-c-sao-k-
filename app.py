@@ -5,8 +5,8 @@ CONG CU TRICH XUAT SAO KE NGAN HANG
 - HTML: VPBank (T24 Core)
 - Excel/CSV: Sacombank, Agribank IPCAS, Excel khac
 - Dinh dang ngay chuan: dd/mm/yyyy
-- Quan ly Cong ty & So tai khoan ngan hang, tach biet danh sach KH/NCC rieng tung cong ty.
-- Ho tro Nap moi (thay the) & Update (bo sung/cap nhat) danh sach KH/NCC + dong bo Cloud (GitHub/Firebase).
+- Quan ly Cong ty, So TK, Chu cong ty (1111), Danh ba KH/NCC tach biet tung cong ty.
+- Ho tro Hoc quy luat (sua 1 lan, lan sau tu ap dung) + Dong bo Cloud (GitHub / Firebase).
 """
 import base64
 import csv
@@ -114,10 +114,16 @@ def _build_initial_db():
     companies = {}
     for name, code, bank, acc in _DEFAULT_ACCOUNTS:
         if code not in companies:
-            companies[code] = {"code": code, "name": name, "accounts": [], "customers": [], "suppliers": []}
+            companies[code] = {
+                "code": code, "name": name, "accounts": [],
+                "owners": [], "customers": [], "suppliers": [], "rules": []
+            }
         companies[code]["accounts"].append({"bank": bank, "account": acc})
     if "lanhien" in companies:
         companies["lanhien"]["customers"] = list(_DEFAULT_LANHIEN_CUSTOMERS)
+        companies["lanhien"]["owners"] = ["NGUYEN VAN LAN"]
+    if "thuykhanh" in companies:
+        companies["thuykhanh"]["owners"] = ["TRAN VAN TRUONG", "TRAN THI THUY"]
     return {"companies": companies}
 
 _LOCAL_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "partners_db.json")
@@ -163,11 +169,17 @@ def load_shared_db():
     if remote_data and isinstance(remote_data.get("companies"), dict):
         for code, cdata in remote_data["companies"].items():
             if code in db["companies"]:
-                if "customers" in cdata: db["companies"][code]["customers"] = cdata["customers"]
-                if "suppliers" in cdata: db["companies"][code]["suppliers"] = cdata["suppliers"]
-                if "accounts" in cdata: db["companies"][code]["accounts"] = cdata["accounts"]
-                if cdata.get("name"): db["companies"][code]["name"] = cdata["name"]
+                for k in ("customers", "suppliers", "accounts", "owners", "rules"):
+                    if k in cdata:
+                        db["companies"][code][k] = cdata[k]
+                if cdata.get("name"):
+                    db["companies"][code]["name"] = cdata["name"]
             else:
+                cdata.setdefault("owners", [])
+                cdata.setdefault("rules", [])
+                cdata.setdefault("customers", [])
+                cdata.setdefault("suppliers", [])
+                cdata.setdefault("accounts", [])
                 db["companies"][code] = cdata
     return db
 
@@ -210,7 +222,7 @@ def save_shared_db(db):
                 pass
 
             content_b64 = base64.b64encode(json.dumps(db, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
-            payload = {"message": "Cap nhat danh ba KH/NCC tu Web", "content": content_b64}
+            payload = {"message": "Cap nhat danh ba & quy luat tu Web", "content": content_b64}
             if sha:
                 payload["sha"] = sha
             req_put = urllib.request.Request(
@@ -1034,10 +1046,10 @@ def extract_excel_or_csv(path):
 
 
 # =========================================================================
-#  4. BO NHAN DIEN TAI KHOAN DOI UNG & GHEP MA DOI TUONG (TACH BIET TUNG CONG TY)
+#  4. BO NHAN DIEN TAI KHOAN DOI UNG, CHU CONG TY, QUY LUAT HOC & SO KHOP MO
 # =========================================================================
 _STOP_WORDS_NAME = {
-    "cong", "ty", "cty", "tnhh", "cp", "co", "phan", "mtv", "tm", "dv", "sx", "xd",
+    "cong", "ty", "cty", "ct", "tnhh", "cp", "co", "phan", "mtv", "tm", "dv", "sx", "xd",
     "tmdv", "tmxd", "dvtm", "xnk", "va", "cn", "chi", "nhanh", "hcm", "hn", "ha", "nam",
     "ninh", "binh", "viet", "nam", "trach", "nhiem", "huu", "han", "thuong", "mai", "dich",
     "vu", "san", "xuat", "xay", "dung", "van", "tai", "dau", "tu", "phat", "trien", "tong",
@@ -1050,13 +1062,45 @@ _STOP_WORDS_NAME = {
 }
 
 _LEGAL_PREFIX_WORDS = {
-    "cong", "ty", "cty", "tnhh", "cp", "co", "phan", "mtv", "ho", "kinh", "doanh", "hkd",
+    "cong", "ty", "cty", "ct", "tnhh", "cp", "co", "phan", "mtv", "ho", "kinh", "doanh", "hkd",
     "trach", "nhiem", "huu", "han", "tu", "van", "dau", "tu", "xay", "dung", "thuong", "mai",
-    "dich", "vu", "san", "xuat", "van", "tai", "tm", "dv", "sx", "xd", "va", "dt", "dvtm",
+    "dich", "vu", "san", "xuat", "van", "tai", "tm", "dv", "sx", "xd", "dt", "va", "dvtm",
     "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc", "dtxd", "tvxd", "xdtm", "sxkd"
 }
 
-_DEFAULT_INTERNAL_PEOPLE = {"nguyen van lan"}
+_CANON_REPLACEMENTS = [
+    (r'\bcong\s+ty\b', 'cty'),
+    (r'\bct\s+(?=tnhh|cp|co\s+phan|tm|dv|dt|xd|sx)', 'cty '),
+    (r'\bco\s+phan\b', 'cp'),
+    (r'\btrach\s+nhiem\s+huu\s+han\b', 'tnhh'),
+    (r'\bthuong\s+mai\b', 'tm'),
+    (r'\bdich\s+vu\b', 'dv'),
+    (r'\bxay\s+dung\b', 'xd'),
+    (r'\bdau\s+tu\b', 'dt'),
+    (r'\bsan\s+xuat\b', 'sx'),
+    (r'\bvan\s+tai\b', 'vt'),
+    (r'\bxuat\s+nhap\s+khau\b', 'xnk'),
+    (r'\bchi\s+nhanh\b', 'cn'),
+    (r'\bmtv\b', ''),
+    (r'\bva\b', ''),
+    (r'\btmdv\b', 'tm dv'),
+    (r'\bdvtm\b', 'dv tm'),
+    (r'\btmxd\b', 'tm xd'),
+    (r'\bxdtm\b', 'xd tm'),
+    (r'\bdtxd\b', 'dt xd'),
+]
+
+def _canon_biz(s):
+    """Chuan hoa viet tat doanh nghiep hai chieu de khop chuan du ten hoi khac 1 ti"""
+    norm = strip_accents(s or "").lower()
+    norm = re.sub(r'[^a-z0-9\s]', ' ', norm)
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    for pat, rep in _CANON_REPLACEMENTS:
+        norm = re.sub(pat, rep, norm)
+    # Cat bo phan chi nhanh o cuoi neu co ("cn tinh ninh binh", "cn ha nam", "hb")
+    norm = re.sub(r'\bcn\s+(?:tinh\s+)?(?:ninh binh|ha nam|hung yen|phu tho|ha noi|viet nam).*$', '', norm).strip()
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    return norm
 
 def _owner_code_candidates(owner_name, owner_code=""):
     cands = set()
@@ -1075,40 +1119,61 @@ def _owner_code_candidates(owner_name, owner_code=""):
     return cands
 
 def _normalize_partner_search_variants(name):
-    norm = strip_accents(name).lower()
-    norm = re.sub(r'[^a-z0-9\s]', ' ', norm)
-    norm = re.sub(r'\s+', ' ', norm).strip()
-    words = norm.split()
-    variants = []
-    if len(words) >= 2:
-        variants.append((norm, len(norm) + 20))
-    core_words = []
-    for idx, w in enumerate(words):
-        if w in _LEGAL_PREFIX_WORDS and (len(words) - idx) > 2:
-            continue
-        core_words.append(w)
-    core = " ".join(core_words).strip()
-    if core and len(core) >= 4:
-        variants.append((core, len(core) + 10))
-    if len(core_words) >= 3:
-        tail2 = " ".join(core_words[-2:])
-        if len(tail2) >= 5:
-            variants.append((tail2, len(tail2)))
-        tail3 = " ".join(core_words[-3:])
-        if len(tail3) >= 7:
-            variants.append((tail3, len(tail3) + 2))
-    return variants
+    raw_norm = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9\s]', ' ', strip_accents(name).lower())).strip()
+    canon = _canon_biz(name)
 
-def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands):
+    variants = []
+    seen = set()
+    def add_v(v, score):
+        v = v.strip()
+        if v and v not in seen:
+            seen.add(v)
+            variants.append((v, score))
+
+    if len(raw_norm.split()) >= 2:
+        add_v(raw_norm, len(raw_norm) + 35)
+    if len(canon.split()) >= 2:
+        add_v(canon, len(canon) + 30)
+
+    # Rut gon tien to phap ly
+    for base in (canon, raw_norm):
+        words = base.split()
+        core_words = []
+        for idx, w in enumerate(words):
+            if w in _LEGAL_PREFIX_WORDS and (len(words) - idx) > 2:
+                continue
+            core_words.append(w)
+        core = " ".join(core_words).strip()
+        if core and len(core) >= 4:
+            add_v(core, len(core) + 15)
+        if len(core_words) >= 3:
+            tail2 = " ".join(core_words[-2:])
+            if len(tail2) >= 5:
+                add_v(tail2, len(tail2) + 2)
+            tail3 = " ".join(core_words[-3:])
+            if len(tail3) >= 7:
+                add_v(tail3, len(tail3) + 5)
+
+    # Core tokens dung cho so khop mo (token overlap)
+    dist_tokens = [w for w in canon.split() if w not in _LEGAL_PREFIX_WORDS and w not in _STOP_WORDS_NAME and len(w) >= 2]
+    return variants, dist_tokens
+
+def _match_from_directory(search_text_norm, canon_text, raw_text, partner_list, owner_cands):
     if not partner_list:
         return None
+
     best_code = None
     best_score = -1
 
-    masked = " " + search_text_norm + " "
+    masked_raw = " " + search_text_norm + " "
+    masked_canon = " " + canon_text + " "
     for oc in sorted(owner_cands, key=len, reverse=True):
         if len(oc) >= 4:
-            masked = masked.replace(f" {oc} ", " ")
+            masked_raw = masked_raw.replace(f" {oc} ", " ")
+            masked_canon = masked_canon.replace(f" {oc} ", " ")
+
+    masked_tokens = set(masked_canon.split())
+    fuzzy_candidates = []
 
     for item in partner_list:
         code = str(item.get("code", "")).strip()
@@ -1117,18 +1182,40 @@ def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands)
         if not code or not name:
             continue
 
+        # 1. Khop Ma so thue
         if len(mst) >= 10 and mst in raw_text:
             return code
 
-        for variant, base_score in _normalize_partner_search_variants(name):
+        # 2. Khop chinh xac cum ten (ca ban goc va ban chuan hoa viet tat)
+        variants, dist_tokens = _normalize_partner_search_variants(name)
+        matched_exact = False
+        for variant, base_score in variants:
             if variant in owner_cands:
                 continue
-            if re.search(r'(?<![a-z0-9])' + re.escape(variant) + r'(?![a-z0-9])', masked):
+            pat = r'(?<![a-z0-9])' + re.escape(variant) + r'(?![a-z0-9])'
+            if re.search(pat, masked_canon) or re.search(pat, masked_raw):
+                matched_exact = True
                 if base_score > best_score:
                     best_score = base_score
                     best_code = code
 
-    return best_code
+        # 3. Thu so khop mo theo tu phan biet (de bat truong hop ten khac 1 ti)
+        if not matched_exact and len(dist_tokens) >= 2:
+            hits = [t for t in dist_tokens if t in masked_tokens]
+            ratio = len(hits) / len(dist_tokens)
+            # Phai trung it nhat 2 tu phan biet VA >= 66% tong so tu phan biet
+            if len(hits) >= 2 and ratio >= 0.66:
+                fuzzy_score = len(hits) * 10 + ratio * 10
+                fuzzy_candidates.append((fuzzy_score, code))
+
+    if best_code:
+        return best_code
+
+    if fuzzy_candidates:
+        fuzzy_candidates.sort(key=lambda x: x[0], reverse=True)
+        return fuzzy_candidates[0][1]
+
+    return None
 
 def _resolve_bank_partner_code(bank_key, source_file=""):
     known = {"acb", "agribank", "bidv", "vietinbank", "lpbank", "mbbank", "vpbank", "sacombank"}
@@ -1143,7 +1230,8 @@ def _resolve_bank_partner_code(bank_key, source_file=""):
 
 
 def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
-                     customers=None, suppliers=None, bank_code="", acc_to_comp=None):
+                     customers=None, suppliers=None, owners=None, rules=None,
+                     bank_code="", acc_to_comp=None):
     no_val = to_num(row.get('No'))
     co_val = to_num(row.get('Co'))
     mota = row.get('MoTa', '')
@@ -1152,7 +1240,25 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
 
     txt = strip_accents(mota).lower()
     dt_txt = strip_accents(doitac).lower()
-    combined = f"{txt} {dt_txt}"
+    combined = re.sub(r'\s+', ' ', f"{txt} {dt_txt}").strip()
+    canon_combined = _canon_biz(combined)
+
+    # -1. UU TIEN CAO NHAT: QUY LUAT DA LUU CUA RIENG CONG TY (Sua 1 lan, lan sau tu theo!)
+    if rules:
+        direction = "in" if (co_val > 0 and no_val == 0) else ("out" if (no_val > 0 and co_val == 0) else "both")
+        for rule in reversed(rules):
+            kw = strip_accents(rule.get("keyword", "")).lower().strip()
+            r_dir = rule.get("direction", "both")
+            if not kw:
+                continue
+            if r_dir != "both" and r_dir != direction:
+                continue
+            if kw in combined or _canon_biz(kw) in canon_combined:
+                r_tk = str(rule.get("tk", "")).strip()
+                r_madt = str(rule.get("madt", "")).strip()
+                if r_tk in ("6422", "515") and not r_madt:
+                    r_madt = bank_code
+                return r_tk, r_madt
 
     # 0. CAC KHOAN VAY / THUE / BHXH / NOI BO / LUONG -> DE TRONG ""
     other_non_keywords = (
@@ -1192,14 +1298,15 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
         if is_fee:
             return "6422", bank_code
 
-    # 3. NOP / RUT TIEN MAT, RUT / CHI SEC, NGUYEN VAN LAN Chuyen tien (TK 1111) -> MaDT de trong
-    is_internal_person = any(
+    # 3. CHU CONG TY / NGUOI NOP-RUT QUY & NOP/RUT TIEN MAT, CHI SEC (TK 1111) -> MaDT de trong
+    owner_people = [strip_accents(p).lower().strip() for p in (owners or []) if p and str(p).strip()]
+    is_owner_person = any(
         re.search(r'(?<![a-z0-9])' + re.escape(pname) + r'(?![a-z0-9])', combined)
-        for pname in _DEFAULT_INTERNAL_PEOPLE
+        for pname in owner_people if len(pname) >= 3
     )
     is_cash_or_cheque = (
         "tien mat, vang tien te tai don vi" in dt_txt
-        or is_internal_person
+        or is_owner_person
         or any(k in combined for k in (
             "nop tien", "rut tien", "rut sec", "chi sec", "linh tien",
             "nt vao tk", "nop tm", "nt-tk-acb", "nop tien mat"
@@ -1212,12 +1319,11 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
 
     owner_cands = _owner_code_candidates(owner_name, owner_code=owner_code)
     raw_combined = f"{mota} {doitac}"
-    norm_combined = re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())
-    norm_combined = re.sub(r'\s+', ' ', norm_combined).strip()
+    norm_combined = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())).strip()
 
-    # 4. KHACH TRA TIEN (TK 131) -> CHI DUNG DANH SACH KHACH HANG CUA CONG TY DO
+    # 4. KHACH TRA TIEN (TK 131) -> CHI TIM TRONG DANH SACH KHACH HANG CUA DUNG CONG TY DO
     if co_val > 0 and no_val == 0:
-        ma_dt = _match_from_directory(norm_combined, raw_combined, customers or [], owner_cands) or ""
+        ma_dt = _match_from_directory(norm_combined, canon_combined, raw_combined, customers or [], owner_cands) or ""
         if not ma_dt and acc_to_comp:
             for acc_no, comp_code in acc_to_comp.items():
                 if len(acc_no) >= 7 and acc_no != owner_acc and comp_code not in owner_cands and acc_no in raw_combined:
@@ -1236,9 +1342,9 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
         if is_customer_pay:
             return "131", ma_dt
 
-    # 5. TRA TIEN NHA CUNG CAP (TK 331) -> CHI DUNG DANH SACH NHA CUNG CAP CUA CONG TY DO
+    # 5. TRA TIEN NHA CUNG CAP (TK 331) -> CHI TIM TRONG DANH SACH NHA CUNG CAP CUA DUNG CONG TY DO
     if no_val > 0 and co_val == 0:
-        ma_dt = _match_from_directory(norm_combined, raw_combined, suppliers or [], owner_cands) or ""
+        ma_dt = _match_from_directory(norm_combined, canon_combined, raw_combined, suppliers or [], owner_cands) or ""
         if not ma_dt and acc_to_comp:
             for acc_no, comp_code in acc_to_comp.items():
                 if len(acc_no) >= 7 and acc_no != owner_acc and comp_code not in owner_cands and acc_no in raw_combined:
@@ -1418,7 +1524,7 @@ def create_workbook_from_sheets(sheets_data, mode="4col"):
 
 
 # =========================================================================
-#  6. GIAO DIEN WEB PASTEL + THEM CONG TY/TK NH + UPDATE & XEM DANH SACH
+#  6. GIAO DIEN WEB PASTEL + BO LOC CHU CONG TY + HOC QUY LUAT TU DONG
 # =========================================================================
 HTML_UI = r"""<!DOCTYPE html>
 <html lang="vi">
@@ -1437,7 +1543,7 @@ HTML_UI = r"""<!DOCTYPE html>
             color: #3d485c;
         }
         .container {
-            max-width: 1260px;
+            max-width: 1280px;
             margin: 0 auto;
             background: rgba(255, 255, 255, 0.96);
             padding: 32px;
@@ -1471,16 +1577,21 @@ HTML_UI = r"""<!DOCTYPE html>
             font-size: 13.5px;
             background: #fff;
             color: #3d485c;
-            min-width: 320px;
+            min-width: 310px;
             max-width: 100%;
         }
-        .acc-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+        .chip-list { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
         .acc-chip {
             display: inline-flex; align-items: center; gap: 6px;
             background: #eef3ff; border: 1px solid #cfe0fc; color: #3c5791;
             padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
         }
-        .acc-del { cursor: pointer; color: #c94c5b; font-weight: bold; border: none; background: transparent; font-size: 14px; padding: 0 2px; }
+        .owner-chip {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #fff3e0; border: 1px solid #f7d5a8; color: #8c5214;
+            padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
+        }
+        .chip-del { cursor: pointer; color: #c94c5b; font-weight: bold; border: none; background: transparent; font-size: 14px; padding: 0 2px; }
         .badge-count {
             display: inline-block; padding: 5px 11px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
             background: #e8f8f0; color: #1f704b; border: 1px solid #bfead3;
@@ -1492,7 +1603,7 @@ HTML_UI = r"""<!DOCTYPE html>
         }
 
         .upload-zone {
-            border: 2.5px dashed #9cb8f3; background: #f4f8ff; padding: 28px 20px;
+            border: 2.5px dashed #9cb8f3; background: #f4f8ff; padding: 26px 20px;
             text-align: center; border-radius: 16px; cursor: pointer; margin-bottom: 18px; transition: all 0.2s ease;
         }
         .upload-zone:hover { background: #e9f1ff; border-color: #779be8; transform: translateY(-1px); }
@@ -1508,6 +1619,7 @@ HTML_UI = r"""<!DOCTYPE html>
             cursor: pointer; text-decoration: none; display: inline-block; transition: all 0.15s ease; transform: translateY(0);
         }
         .btn-sm { padding: 7px 12px; font-size: 12px; border-radius: 9px; }
+        .btn-xs { padding: 4px 8px; font-size: 11.5px; border-radius: 7px; }
         .btn-primary {
             background: linear-gradient(180deg, #91b3fa 0%, #769ce9 100%); color: #fff;
             box-shadow: 0 5px 0 #5b7fc9, 0 8px 16px rgba(118, 156, 233, 0.32);
@@ -1550,6 +1662,13 @@ HTML_UI = r"""<!DOCTYPE html>
         .btn-peach:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #dc9372; }
         .btn-peach:active { transform: translateY(2px); box-shadow: 0 1px 0 #dc9372; }
 
+        .btn-amber {
+            background: linear-gradient(180deg, #ffe7b8 0%, #f9cf7e 100%); color: #664407;
+            box-shadow: 0 3px 0 #d9aa52;
+        }
+        .btn-amber:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #d9aa52; }
+        .btn-amber:active { transform: translateY(2px); box-shadow: 0 1px 0 #d9aa52; }
+
         .tab-btn {
             padding: 9px 16px; border: 1px solid #dce3f0; background: #f5f7fc; color: #4b5d7a;
             border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600;
@@ -1568,7 +1687,7 @@ HTML_UI = r"""<!DOCTYPE html>
 
         #fileList { margin: 10px 0 0 0; font-size: 13px; color: #5b7fc9; font-weight: 600; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
-        th, td { border: 1px solid #e6ebf5; padding: 9px 11px; text-align: left; }
+        th, td { border: 1px solid #e6ebf5; padding: 8px 10px; text-align: left; }
         th { background: #e4ecfc; color: #364b75; font-weight: 700; position: sticky; top: 0; z-index: 2; }
         tbody tr:nth-child(even) { background: #fafbfe; }
         tbody tr:hover { background: #f2f6ff; }
@@ -1583,20 +1702,19 @@ HTML_UI = r"""<!DOCTYPE html>
         .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
         .preview-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
         .scroll-box { max-height: 500px; overflow: auto; border: 1px solid #e1e7f2; border-radius: 12px; }
-        .cell-input { width: 100%; padding: 5px 8px; border: 1px solid #dde4f2; border-radius: 6px; font-size: 12.5px; background: #fcfdff; color: #3d485c; }
+        .cell-input { width: 100%; padding: 5px 7px; border: 1px solid #dde4f2; border-radius: 6px; font-size: 12.5px; background: #fcfdff; color: #3d485c; }
         .cell-input:focus { border-color: #9c8be8; background: #fff; outline: none; }
         .tk-badge { text-align: center; font-weight: 700; color: #5b48a8; }
 
-        /* MODAL PASTEL */
         .modal-backdrop {
             display: none; position: fixed; inset: 0; background: rgba(50, 62, 90, 0.4);
             backdrop-filter: blur(3px); z-index: 999; align-items: center; justify-content: center; padding: 16px;
         }
         .modal-box {
-            background: #fff; border-radius: 18px; padding: 24px; width: 100%; max-width: 520px;
+            background: #fff; border-radius: 18px; padding: 24px; width: 100%; max-width: 540px;
             box-shadow: 0 20px 50px rgba(60, 75, 110, 0.25); border: 1px solid #e5ebf7;
         }
-        .modal-box.wide { max-width: 820px; }
+        .modal-box.wide { max-width: 860px; }
         .modal-title { font-size: 18px; font-weight: 700; color: #4b659e; margin: 0 0 14px 0; }
         .form-group { margin-bottom: 12px; }
         .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: #4b5d7a; }
@@ -1609,14 +1727,14 @@ HTML_UI = r"""<!DOCTYPE html>
     <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
     <div class="subtitle">
         Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • Công ty nào chỉ dùng đúng danh sách Khách hàng, NCC của công ty đó để tránh nhầm lẫn.
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • Mỗi công ty có riêng Danh bạ KH/NCC, Chủ công ty (1111) và Quy luật đã học (sửa 1 lần, lần sau tự theo).
     </div>
 
-    <!-- KHU VUC QUAN LY CONG TY, SO TAI KHOAN & DANH SACH KH/NCC -->
+    <!-- KHU VUC QUAN LY CONG TY, SO TK, CHU CONG TY & DANH SACH KH/NCC -->
     <div class="partner-card">
         <div class="partner-header">
             <div style="font-weight: 700; color: #574699; font-size: 15px;">
-                🏢 Quản lý Công ty, Số tài khoản NH &amp; Danh bạ Khách hàng / Nhà cung cấp
+                🏢 Quản lý Công ty, Số TK, Chủ công ty (1111) &amp; Danh bạ KH / NCC
             </div>
             <div id="syncBadge" style="font-size: 12px; color: #1f704b; font-weight: 600;"></div>
         </div>
@@ -1626,10 +1744,12 @@ HTML_UI = r"""<!DOCTYPE html>
             <select id="companySelect" onchange="onSelectCompany()"></select>
             <button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()">➕ Thêm mới Công ty</button>
             <button class="btn btn-soft btn-sm" onclick="openAddAccountModal()">🏦 Thêm TK Ngân hàng</button>
+            <button class="btn btn-amber btn-sm" onclick="openViewRulesModal()" id="rulesBtn">📜 Quy luật đã học (0)</button>
             <button class="btn btn-peach btn-sm" onclick="deleteCompany()">🗑️ Xóa CT</button>
         </div>
 
-        <div id="accChipsBox" class="acc-chips"></div>
+        <div id="accChipsBox" class="chip-list"></div>
+        <div id="ownerChipsBox" class="chip-list"></div>
 
         <div class="partner-row" style="margin-top: 10px;">
             <div class="partner-group">
@@ -1637,7 +1757,7 @@ HTML_UI = r"""<!DOCTYPE html>
                 <input type="file" id="upKhReplace" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', 'replace', this)">
                 <input type="file" id="upKhUpdate" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', 'update', this)">
                 <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upKhReplace')">📥 Nạp mới DS KH</button>
-                <button class="btn btn-mint btn-sm" onclick="triggerPartnerUpload('upKhUpdate')" title="Thêm KH mới & cập nhật tên/MST nếu trùng mã, không làm mất KH cũ">🔄 Update DS KH</button>
+                <button class="btn btn-mint btn-sm" onclick="triggerPartnerUpload('upKhUpdate')">🔄 Update DS KH</button>
                 <button class="btn btn-soft btn-sm" onclick="openViewPartnersModal('customers')">👁️ Xem</button>
             </div>
 
@@ -1646,7 +1766,7 @@ HTML_UI = r"""<!DOCTYPE html>
                 <input type="file" id="upNccReplace" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', 'replace', this)">
                 <input type="file" id="upNccUpdate" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', 'update', this)">
                 <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upNccReplace')">📥 Nạp mới DS NCC</button>
-                <button class="btn btn-mint btn-sm" onclick="triggerPartnerUpload('upNccUpdate')" title="Thêm NCC mới & cập nhật tên/MST nếu trùng mã, không làm mất NCC cũ">🔄 Update DS NCC</button>
+                <button class="btn btn-mint btn-sm" onclick="triggerPartnerUpload('upNccUpdate')">🔄 Update DS NCC</button>
                 <button class="btn btn-soft btn-sm" onclick="openViewPartnersModal('suppliers')">👁️ Xem</button>
             </div>
         </div>
@@ -1689,7 +1809,7 @@ HTML_UI = r"""<!DOCTYPE html>
 
         <div class="preview-section">
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
-                <h3 style="margin: 0; color: #4b659e;">🔍 Xem Trước &amp; Chỉnh Sửa Trước Khi Tải</h3>
+                <h3 style="margin: 0; color: #4b659e;">🔍 Xem Trước &amp; Sửa Quy Luật (Sửa 1 lần, lần sau tự theo)</h3>
                 <div class="mode-switch">
                     <button id="btnMode4" class="mode-pill" onclick="switchPreviewMode('4col')">Mẫu 4 cột</button>
                     <button id="btnModeAsp" class="mode-pill active" onclick="switchPreviewMode('asp')">Kết xuất cho ASP (6 cột)</button>
@@ -1703,6 +1823,7 @@ HTML_UI = r"""<!DOCTYPE html>
                 <input type="text" id="searchBox" style="width: 300px;" placeholder="🔎 Tìm ngày, số tiền, diễn giải, TK, mã..." oninput="filterPreview()">
             </div>
 
+            <datalist id="partnerDatalist"></datalist>
             <div class="scroll-box">
                 <table>
                     <thead id="previewHead"></thead>
@@ -1713,40 +1834,23 @@ HTML_UI = r"""<!DOCTYPE html>
     </div>
 </div>
 
-<!-- MODAL 1: THEM MOI CONG TY & TAI KHOAN NGAN HANG -->
+<!-- MODAL 1: THEM MOI CONG TY -->
 <div id="modalAddCompany" class="modal-backdrop">
     <div class="modal-box">
         <div class="modal-title">➕ Thêm mới Công ty &amp; Tài khoản Ngân hàng</div>
-        <div class="form-group">
-            <label>Tên công ty (*):</label>
-            <input type="text" id="newCompName" placeholder="VD: CÔNG TY TNHH ABC">
-        </div>
-        <div class="form-group">
-            <label>Mã công ty - viết liền không dấu (*):</label>
-            <input type="text" id="newCompCode" placeholder="VD: congtyabc">
-        </div>
+        <div class="form-group"><label>Tên công ty (*):</label><input type="text" id="newCompName" placeholder="VD: CÔNG TY TNHH ABC"></div>
+        <div class="form-group"><label>Mã công ty - viết liền không dấu (*):</label><input type="text" id="newCompCode" placeholder="VD: congtyabc"></div>
         <div class="form-group">
             <label>Ngân hàng:</label>
             <select id="newCompBank">
-                <option value="Vietinbank">Vietinbank</option>
-                <option value="BIDV">BIDV</option>
-                <option value="LPBank">LPBank</option>
-                <option value="ACB">ACB</option>
-                <option value="MB">MBBank</option>
-                <option value="Agribank">Agribank</option>
-                <option value="Sacombank">Sacombank</option>
-                <option value="Vietcombank">Vietcombank</option>
-                <option value="VPBank">VPBank</option>
-                <option value="MSB">MSB</option>
-                <option value="NCB">NCB</option>
-                <option value="Co-op Bank">Co-op Bank</option>
-                <option value="Khác">Ngân hàng khác</option>
+                <option value="Vietinbank">Vietinbank</option><option value="BIDV">BIDV</option><option value="LPBank">LPBank</option>
+                <option value="ACB">ACB</option><option value="MB">MBBank</option><option value="Agribank">Agribank</option>
+                <option value="Sacombank">Sacombank</option><option value="Vietcombank">Vietcombank</option><option value="VPBank">VPBank</option>
+                <option value="MSB">MSB</option><option value="NCB">NCB</option><option value="Co-op Bank">Co-op Bank</option><option value="Khác">Khác</option>
             </select>
         </div>
-        <div class="form-group">
-            <label>Số tài khoản ngân hàng (có thể để trống và thêm sau):</label>
-            <input type="text" id="newCompAcc" placeholder="VD: 118003052315">
-        </div>
+        <div class="form-group"><label>Số tài khoản ngân hàng (có thể để trống):</label><input type="text" id="newCompAcc" placeholder="VD: 118003052315"></div>
+        <div class="form-group"><label>Chủ công ty / Người nộp rút quỹ (gán 1111, cách nhau dấu phẩy):</label><input type="text" id="newCompOwners" placeholder="VD: NGUYEN VAN A, TRAN THI B"></div>
         <div class="modal-footer">
             <button class="btn btn-soft btn-sm" onclick="closeModal('modalAddCompany')">Hủy</button>
             <button class="btn btn-primary btn-sm" onclick="saveNewCompany()">💾 Lưu Công ty</button>
@@ -1754,7 +1858,7 @@ HTML_UI = r"""<!DOCTYPE html>
     </div>
 </div>
 
-<!-- MODAL 2: THEM TAI KHOAN NGAN HANG CHO CONG TY DANG CHON -->
+<!-- MODAL 2: THEM TK NGAN HANG -->
 <div id="modalAddAccount" class="modal-backdrop">
     <div class="modal-box">
         <div class="modal-title">🏦 Thêm Tài khoản Ngân hàng</div>
@@ -1762,25 +1866,13 @@ HTML_UI = r"""<!DOCTYPE html>
         <div class="form-group">
             <label>Ngân hàng:</label>
             <select id="addAccBank">
-                <option value="Vietinbank">Vietinbank</option>
-                <option value="BIDV">BIDV</option>
-                <option value="LPBank">LPBank</option>
-                <option value="ACB">ACB</option>
-                <option value="MB">MBBank</option>
-                <option value="Agribank">Agribank</option>
-                <option value="Sacombank">Sacombank</option>
-                <option value="Vietcombank">Vietcombank</option>
-                <option value="VPBank">VPBank</option>
-                <option value="MSB">MSB</option>
-                <option value="NCB">NCB</option>
-                <option value="Co-op Bank">Co-op Bank</option>
-                <option value="Khác">Ngân hàng khác</option>
+                <option value="Vietinbank">Vietinbank</option><option value="BIDV">BIDV</option><option value="LPBank">LPBank</option>
+                <option value="ACB">ACB</option><option value="MB">MBBank</option><option value="Agribank">Agribank</option>
+                <option value="Sacombank">Sacombank</option><option value="Vietcombank">Vietcombank</option><option value="VPBank">VPBank</option>
+                <option value="MSB">MSB</option><option value="NCB">NCB</option><option value="Co-op Bank">Co-op Bank</option><option value="Khác">Khác</option>
             </select>
         </div>
-        <div class="form-group">
-            <label>Số tài khoản (*):</label>
-            <input type="text" id="addAccNumber" placeholder="Nhập số tài khoản ngân hàng...">
-        </div>
+        <div class="form-group"><label>Số tài khoản (*):</label><input type="text" id="addAccNumber" placeholder="Nhập số tài khoản ngân hàng..."></div>
         <div class="modal-footer">
             <button class="btn btn-soft btn-sm" onclick="closeModal('modalAddAccount')">Hủy</button>
             <button class="btn btn-primary btn-sm" onclick="saveNewAccount()">💾 Lưu Số TK</button>
@@ -1788,7 +1880,7 @@ HTML_UI = r"""<!DOCTYPE html>
     </div>
 </div>
 
-<!-- MODAL 3: XEM / TIM KIEM / XOA DANH SACH KHACH HANG HOAC NCC -->
+<!-- MODAL 3: XEM / XOA DANH SACH KH / NCC -->
 <div id="modalViewPartners" class="modal-backdrop">
     <div class="modal-box wide">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
@@ -1798,20 +1890,62 @@ HTML_UI = r"""<!DOCTYPE html>
         <div class="scroll-box" style="max-height:380px;">
             <table>
                 <thead>
-                    <tr>
-                        <th class="text-center" style="width:50px;">STT</th>
-                        <th style="width:150px;">Mã đối tượng</th>
-                        <th>Tên Khách hàng / Nhà cung cấp</th>
-                        <th style="width:130px;">Mã số thuế</th>
-                        <th class="text-center" style="width:65px;">Xóa</th>
-                    </tr>
+                    <tr><th class="text-center" style="width:50px;">STT</th><th style="width:150px;">Mã đối tượng</th><th>Tên Khách hàng / NCC</th><th style="width:130px;">Mã số thuế</th><th class="text-center" style="width:65px;">Xóa</th></tr>
                 </thead>
                 <tbody id="viewPartnersBody"></tbody>
             </table>
         </div>
-        <div class="modal-footer">
-            <button class="btn btn-primary btn-sm" onclick="closeModal('modalViewPartners')">Đóng</button>
+        <div class="modal-footer"><button class="btn btn-primary btn-sm" onclick="closeModal('modalViewPartners')">Đóng</button></div>
+    </div>
+</div>
+
+<!-- MODAL 4: LUU QUY LUAT TU DONG (SUA 1 LAN, LAN SAU TU THEO) -->
+<div id="modalSaveRule" class="modal-backdrop">
+    <div class="modal-box">
+        <div class="modal-title">💾 Lưu Quy Luật Tự Động Cho Công Ty [<span id="ruleCompBadge"></span>]</div>
+        <div style="font-size:12.5px; color:#5b6982; background:#f5f7fd; padding:10px; border-radius:8px; margin-bottom:12px;" id="ruleRowContext"></div>
+        <div class="form-group">
+            <label>Từ khóa nhận diện (tên người/công ty hoặc cụm từ trong diễn giải/đối ứng):</label>
+            <input type="text" id="ruleKeyword" placeholder="VD: TRAN VAN TRUONG hoặc thinh phat ceramic">
         </div>
+        <div class="form-group">
+            <label>Áp dụng khi:</label>
+            <select id="ruleDirection">
+                <option value="in">Chỉ tiền VÀO (Có > 0)</option>
+                <option value="out">Chỉ tiền RA (Nợ > 0)</option>
+                <option value="both">Cả tiền VÀO &amp; RA</option>
+            </select>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group"><label>Gán TK đối ứng:</label><input type="text" id="ruleTK" placeholder="VD: 1111, 131, 331, 6422, 515 hoặc trống"></div>
+            <div class="form-group"><label>Gán Mã đối tượng:</label><input type="text" id="ruleMaDT" list="partnerDatalist" placeholder="VD: thinhphat ceramic (hoặc trống)"></div>
+        </div>
+        <div class="form-group" style="margin-top:6px;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:#8c5214;">
+                <input type="checkbox" id="ruleAlsoOwner" style="width:auto;" onchange="onToggleOwnerRule()">
+                👑 Đây là Chủ công ty / Thủ quỹ (tự động gán TK 1111 &amp; thêm vào danh sách Chủ CT)
+            </label>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-soft btn-sm" onclick="closeModal('modalSaveRule')">Hủy</button>
+            <button class="btn btn-asp btn-sm" onclick="confirmSaveRule()">✅ Lưu &amp; Áp dụng tất cả dòng giống vậy</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL 5: XEM QUY LUAT DA HOC -->
+<div id="modalViewRules" class="modal-backdrop">
+    <div class="modal-box wide">
+        <div class="modal-title" id="viewRulesTitle">📜 Danh sách Quy luật đã lưu</div>
+        <div class="scroll-box" style="max-height:380px;">
+            <table>
+                <thead>
+                    <tr><th class="text-center" style="width:45px;">STT</th><th>Từ khóa nhận diện</th><th style="width:115px;">Chiều tiền</th><th class="text-center" style="width:95px;">TK ĐƯ</th><th style="width:160px;">Mã đối tượng</th><th class="text-center" style="width:60px;">Xóa</th></tr>
+                </thead>
+                <tbody id="viewRulesBody"></tbody>
+            </table>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary btn-sm" onclick="closeModal('modalViewRules')">Đóng</button></div>
     </div>
 </div>
 
@@ -1822,6 +1956,7 @@ let allSheetsData = [];
 let activeIdx = 0;
 let previewMode = 'asp';
 let viewingRoleKey = 'customers';
+let ruleTargetCompCode = '';
 
 async function loadSharedDB() {
     try {
@@ -1855,30 +1990,37 @@ function updateCompanyUI() {
     const khEl = document.getElementById('khStatus');
     const nccEl = document.getElementById('nccStatus');
     const accBox = document.getElementById('accChipsBox');
+    const ownBox = document.getElementById('ownerChipsBox');
+    const rulesBtn = document.getElementById('rulesBtn');
 
     if (!comp) {
         khEl.innerText = '0 Khách hàng'; khEl.className = 'badge-count badge-empty';
         nccEl.innerText = '0 Nhà cung cấp'; nccEl.className = 'badge-count badge-empty';
+        rulesBtn.innerText = '📜 Quy luật đã học (0)';
         accBox.innerHTML = '<span style="font-size:12px;color:#7c879c;">💡 Đang ở chế độ tự nhận diện Công ty theo Số TK của từng file sao kê tải lên.</span>';
+        ownBox.innerHTML = '';
         return;
     }
 
     const khCnt = (comp.customers || []).length;
     const nccCnt = (comp.suppliers || []).length;
-    khEl.innerText = `${khCnt} Khách hàng`;
-    khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
-    nccEl.innerText = `${nccCnt} Nhà cung cấp`;
-    nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+    const ruleCnt = (comp.rules || []).length;
+    khEl.innerText = `${khCnt} Khách hàng`; khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+    nccEl.innerText = `${nccCnt} Nhà cung cấp`; nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+    rulesBtn.innerText = `📜 Quy luật đã học (${ruleCnt})`;
 
     const accs = comp.accounts || [];
-    if (!accs.length) {
-        accBox.innerHTML = '<span style="font-size:12px;color:#8892a6;">Chưa gắn số tài khoản ngân hàng nào.</span>';
-    } else {
-        accBox.innerHTML = '<span style="font-size:12px;font-weight:600;color:#5b6982;">Số TK đã lưu:</span> ' +
-            accs.map((a, idx) =>
-                `<span class="acc-chip">${a.bank}: <b>${a.account}</b> <button class="acc-del" onclick="removeAccount(${idx})" title="Gỡ số TK này">×</button></span>`
-            ).join('');
-    }
+    accBox.innerHTML = '<span style="font-size:12px;font-weight:600;color:#5b6982;">🏦 Số TK:</span> ' +
+        (accs.length ? accs.map((a, idx) =>
+            `<span class="acc-chip">${a.bank}: <b>${a.account}</b> <button class="chip-del" onclick="removeAccount(${idx})">×</button></span>`
+        ).join('') : '<span style="font-size:12px;color:#8892a6;">Chưa gắn số TK.</span>');
+
+    const owners = comp.owners || [];
+    ownBox.innerHTML = '<span style="font-size:12px;font-weight:600;color:#8c5214;">👑 Chủ CT (tự gán 1111):</span> ' +
+        owners.map((o, idx) =>
+            `<span class="owner-chip">${o} <button class="chip-del" onclick="removeOwner(${idx})">×</button></span>`
+        ).join('') +
+        ' <button class="btn btn-amber btn-xs" onclick="addOwnerPrompt()">+ Thêm Chủ CT</button>';
 }
 
 function onSelectCompany() {
@@ -1888,9 +2030,7 @@ function onSelectCompany() {
 
 async function persistDBToServer() {
     const res = await fetch('/api/partners/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sharedDB)
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sharedDB)
     });
     const data = await res.json();
     document.getElementById('syncBadge').innerText = data.message || '✅ Đã lưu';
@@ -1902,6 +2042,7 @@ function openAddCompanyModal() {
     document.getElementById('newCompName').value = '';
     document.getElementById('newCompCode').value = '';
     document.getElementById('newCompAcc').value = '';
+    document.getElementById('newCompOwners').value = '';
     document.getElementById('modalAddCompany').style.display = 'flex';
 }
 
@@ -1910,17 +2051,21 @@ async function saveNewCompany() {
     const code = document.getElementById('newCompCode').value.trim().toLowerCase().replace(/\s+/g, '');
     const bank = document.getElementById('newCompBank').value;
     const acc = document.getElementById('newCompAcc').value.trim();
+    const ownersRaw = document.getElementById('newCompOwners').value;
+    const owners = ownersRaw.split(',').map(x => x.trim()).filter(Boolean);
 
     if (!name || !code) { alert('Vui lòng nhập đầy đủ Tên công ty và Mã công ty!'); return; }
     if (!sharedDB.companies[code]) {
-        sharedDB.companies[code] = { code, name, accounts: [], customers: [], suppliers: [] };
+        sharedDB.companies[code] = { code, name, accounts: [], owners: [], customers: [], suppliers: [], rules: [] };
     } else {
         sharedDB.companies[code].name = name;
     }
-    if (acc) {
-        const exists = sharedDB.companies[code].accounts.some(a => a.account === acc);
-        if (!exists) sharedDB.companies[code].accounts.push({ bank, account: acc });
+    if (acc && !sharedDB.companies[code].accounts.some(a => a.account === acc)) {
+        sharedDB.companies[code].accounts.push({ bank, account: acc });
     }
+    owners.forEach(o => {
+        if (!sharedDB.companies[code].owners.includes(o)) sharedDB.companies[code].owners.push(o);
+    });
     selectedCompanyCode = code;
     closeModal('modalAddCompany');
     renderCompanyDropdown();
@@ -1929,8 +2074,7 @@ async function saveNewCompany() {
 
 function openAddAccountModal() {
     if (!selectedCompanyCode || !sharedDB.companies[selectedCompanyCode]) {
-        alert('Hãy chọn một công ty ở ô phía trên trước khi thêm số TK!');
-        return;
+        alert('Hãy chọn một công ty ở ô phía trên trước!'); return;
     }
     document.getElementById('accModalCompName').innerText = `[${selectedCompanyCode}] ${sharedDB.companies[selectedCompanyCode].name}`;
     document.getElementById('addAccNumber').value = '';
@@ -1943,9 +2087,7 @@ async function saveNewAccount() {
     if (!acc) { alert('Vui lòng nhập Số tài khoản!'); return; }
     const comp = sharedDB.companies[selectedCompanyCode];
     if (!comp.accounts) comp.accounts = [];
-    if (!comp.accounts.some(a => a.account === acc)) {
-        comp.accounts.push({ bank, account: acc });
-    }
+    if (!comp.accounts.some(a => a.account === acc)) comp.accounts.push({ bank, account: acc });
     closeModal('modalAddAccount');
     updateCompanyUI();
     await persistDBToServer();
@@ -1954,15 +2096,34 @@ async function saveNewAccount() {
 async function removeAccount(idx) {
     const comp = sharedDB.companies[selectedCompanyCode];
     if (!comp || !comp.accounts) return;
-    if (!confirm(`Gỡ số tài khoản ${comp.accounts[idx].account} khỏi [${selectedCompanyCode}]?`)) return;
+    if (!confirm(`Gỡ số TK ${comp.accounts[idx].account}?`)) return;
     comp.accounts.splice(idx, 1);
+    updateCompanyUI();
+    await persistDBToServer();
+}
+
+async function addOwnerPrompt() {
+    if (!selectedCompanyCode) return;
+    const name = prompt('Nhập tên Chủ công ty / Thủ quỹ (VD: TRAN VAN TRUONG):');
+    if (!name || !name.trim()) return;
+    const comp = sharedDB.companies[selectedCompanyCode];
+    if (!comp.owners) comp.owners = [];
+    if (!comp.owners.includes(name.trim())) comp.owners.push(name.trim());
+    updateCompanyUI();
+    await persistDBToServer();
+}
+
+async function removeOwner(idx) {
+    const comp = sharedDB.companies[selectedCompanyCode];
+    if (!comp || !comp.owners) return;
+    comp.owners.splice(idx, 1);
     updateCompanyUI();
     await persistDBToServer();
 }
 
 async function deleteCompany() {
     if (!selectedCompanyCode) { alert('Hãy chọn một công ty để xóa!'); return; }
-    if (!confirm(`Bạn có chắc muốn xóa toàn bộ danh bạ của [${selectedCompanyCode}]?`)) return;
+    if (!confirm(`Xóa toàn bộ danh bạ của [${selectedCompanyCode}]?`)) return;
     delete sharedDB.companies[selectedCompanyCode];
     selectedCompanyCode = '';
     renderCompanyDropdown();
@@ -1970,10 +2131,7 @@ async function deleteCompany() {
 }
 
 function triggerPartnerUpload(inputId) {
-    if (!selectedCompanyCode) {
-        alert('Vui lòng chọn Công ty ở ô thả xuống phía trên trước khi nạp hoặc Update danh sách!');
-        return;
-    }
+    if (!selectedCompanyCode) { alert('Vui lòng chọn Công ty ở ô phía trên trước!'); return; }
     document.getElementById(inputId).click();
 }
 
@@ -1995,43 +2153,29 @@ async function uploadPartnerList(roleKey, actionMode, inputEl) {
             await persistDBToServer();
             alert(`✅ Đã nạp mới ${incoming.length} ${label} cho [${selectedCompanyCode}]!`);
         } else {
-            // Update: Them moi & cap nhat theo ma (khong lam mat du lieu cu)
             const current = sharedDB.companies[selectedCompanyCode][roleKey] || [];
             const mapByCode = new Map();
             current.forEach((item, idx) => mapByCode.set(item.code.toLowerCase(), idx));
-
             let added = 0, updated = 0;
             incoming.forEach(item => {
                 const k = item.code.toLowerCase();
-                if (mapByCode.has(k)) {
-                    current[mapByCode.get(k)] = item;
-                    updated++;
-                } else {
-                    mapByCode.set(k, current.length);
-                    current.push(item);
-                    added++;
-                }
+                if (mapByCode.has(k)) { current[mapByCode.get(k)] = item; updated++; }
+                else { mapByCode.set(k, current.length); current.push(item); added++; }
             });
             sharedDB.companies[selectedCompanyCode][roleKey] = current;
             updateCompanyUI();
             await persistDBToServer();
-            alert(`🔄 Đã Update DS ${label} cho [${selectedCompanyCode}]: Thêm mới ${added}, cập nhật ${updated} mục (Tổng: ${current.length})!`);
+            alert(`🔄 Đã Update DS ${label} cho [${selectedCompanyCode}]: Thêm ${added}, cập nhật ${updated} (Tổng: ${current.length})!`);
         }
     } catch (e) {
-        alert('Lỗi khi đọc file danh sách: ' + e);
-    } finally {
-        inputEl.value = '';
-    }
+        alert('Lỗi đọc file danh sách: ' + e);
+    } finally { inputEl.value = ''; }
 }
 
 function openViewPartnersModal(roleKey) {
-    if (!selectedCompanyCode || !sharedDB.companies[selectedCompanyCode]) {
-        alert('Vui lòng chọn một công ty để xem danh sách!');
-        return;
-    }
+    if (!selectedCompanyCode || !sharedDB.companies[selectedCompanyCode]) { alert('Chọn một công ty để xem!'); return; }
     viewingRoleKey = roleKey;
-    const label = roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp';
-    document.getElementById('viewPartnersTitle').innerText = `📋 Danh sách ${label} - [${selectedCompanyCode}]`;
+    document.getElementById('viewPartnersTitle').innerText = `📋 Danh sách ${roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp'} - [${selectedCompanyCode}]`;
     document.getElementById('viewPartnersSearch').value = '';
     renderPartnerModalRows();
     document.getElementById('modalViewPartners').style.display = 'flex';
@@ -2043,34 +2187,54 @@ function renderPartnerModalRows() {
     const kw = document.getElementById('viewPartnersSearch').value.trim().toLowerCase();
     const tbody = document.getElementById('viewPartnersBody');
     tbody.innerHTML = '';
-
     const filtered = list.map((item, idx) => ({ ...item, _idx: idx }))
         .filter(it => !kw || it.code.toLowerCase().includes(kw) || it.name.toLowerCase().includes(kw) || (it.mst || '').includes(kw));
-
     if (!filtered.length) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="color:#888;padding:20px;">Chưa có dữ liệu</td></tr>';
         return;
     }
     filtered.forEach((it, i) => {
         let tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td class="text-center">${i + 1}</td>
-            <td><b>${it.code}</b></td>
-            <td>${it.name}</td>
-            <td>${it.mst || ''}</td>
-            <td class="text-center"><button class="btn btn-peach btn-sm" style="padding:3px 8px;" onclick="deletePartnerItem(${it._idx})">×</button></td>
-        `;
+        tr.innerHTML = `<td class="text-center">${i + 1}</td><td><b>${it.code}</b></td><td>${it.name}</td><td>${it.mst || ''}</td>
+            <td class="text-center"><button class="btn btn-peach btn-xs" onclick="deletePartnerItem(${it._idx})">×</button></td>`;
         tbody.appendChild(tr);
     });
 }
 
 async function deletePartnerItem(origIdx) {
+    sharedDB.companies[selectedCompanyCode][viewingRoleKey].splice(origIdx, 1);
+    renderPartnerModalRows(); updateCompanyUI(); await persistDBToServer();
+}
+
+function openViewRulesModal() {
+    if (!selectedCompanyCode || !sharedDB.companies[selectedCompanyCode]) { alert('Chọn một công ty để xem!'); return; }
+    document.getElementById('viewRulesTitle').innerText = `📜 Quy luật đã học - [${selectedCompanyCode}]`;
+    renderRulesModalRows();
+    document.getElementById('modalViewRules').style.display = 'flex';
+}
+
+function renderRulesModalRows() {
     const comp = sharedDB.companies[selectedCompanyCode];
-    if (!comp || !comp[viewingRoleKey]) return;
-    comp[viewingRoleKey].splice(origIdx, 1);
-    renderPartnerModalRows();
-    updateCompanyUI();
-    await persistDBToServer();
+    const rules = (comp && comp.rules) ? comp.rules : [];
+    const tbody = document.getElementById('viewRulesBody');
+    tbody.innerHTML = '';
+    if (!rules.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color:#888;padding:20px;">Chưa có quy luật nào được lưu</td></tr>';
+        return;
+    }
+    const dirLabel = { in: 'Tiền VÀO (Có)', out: 'Tiền RA (Nợ)', both: 'Cả hai chiều' };
+    rules.forEach((r, idx) => {
+        let tr = document.createElement('tr');
+        tr.innerHTML = `<td class="text-center">${idx + 1}</td><td><b>${r.keyword}</b></td><td>${dirLabel[r.direction] || r.direction}</td>
+            <td class="text-center tk-badge">${r.tk || '(trống)'}</td><td>${r.madt || ''}</td>
+            <td class="text-center"><button class="btn btn-peach btn-xs" onclick="deleteRuleItem(${idx})">×</button></td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+async function deleteRuleItem(idx) {
+    sharedDB.companies[selectedCompanyCode].rules.splice(idx, 1);
+    renderRulesModalRows(); updateCompanyUI(); await persistDBToServer();
 }
 
 function showFiles() {
@@ -2137,13 +2301,31 @@ function renderTabs() {
     if (allSheetsData.length > 0) selectTab(0);
 }
 
+function populatePartnerDatalist(compCode) {
+    const dl = document.getElementById('partnerDatalist');
+    dl.innerHTML = '';
+    const comp = sharedDB.companies[compCode];
+    if (!comp) return;
+    const seen = new Set();
+    [...(comp.customers || []), ...(comp.suppliers || [])].forEach(it => {
+        if (!seen.has(it.code)) {
+            seen.add(it.code);
+            let opt = document.createElement('option');
+            opt.value = it.code;
+            opt.label = it.name;
+            dl.appendChild(opt);
+        }
+    });
+}
+
 function selectTab(idx) {
     activeIdx = idx;
     document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
     document.getElementById('searchBox').value = '';
     const s = allSheetsData[idx];
+    populatePartnerDatalist(s.company_code || selectedCompanyCode);
     document.getElementById('sheetMeta').innerHTML =
-        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Dùng danh bạ công ty: <b>[${s.company_code || 'chưa gắn'}] ${s.customer || ''}</b> • Giao dịch: <b>${s.rows.length}</b>`;
+        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Công ty: <b>[${s.company_code || 'chưa gắn'}] ${s.customer || ''}</b> • Giao dịch: <b>${s.rows.length}</b>`;
     renderPreviewRows(s.rows);
 }
 
@@ -2154,6 +2336,7 @@ function filterPreview() {
     const filtered = rows.filter(r =>
         (r.Ngay || '').toLowerCase().includes(kw) ||
         (r.MoTa || '').toLowerCase().includes(kw) ||
+        (r.DoiTac || '').toLowerCase().includes(kw) ||
         (r.No || '').toLowerCase().includes(kw) ||
         (r.Co || '').toLowerCase().includes(kw) ||
         (r.TK || '').toLowerCase().includes(kw) ||
@@ -2175,12 +2358,13 @@ function renderPreviewRows(rows) {
 
     if (previewMode === 'asp') {
         thead.innerHTML = `<tr>
-            <th class="text-center" style="width: 105px;">Ngày</th>
-            <th class="text-right" style="width: 130px;">Nợ</th>
-            <th class="text-right" style="width: 130px;">Có</th>
+            <th class="text-center" style="width: 100px;">Ngày</th>
+            <th class="text-right" style="width: 120px;">Nợ</th>
+            <th class="text-right" style="width: 120px;">Có</th>
             <th>Diễn giải</th>
-            <th class="text-center" style="width: 120px;">TK đối ứng</th>
-            <th style="width: 155px;">Mã đối tượng</th>
+            <th class="text-center" style="width: 95px;">TK ĐƯ</th>
+            <th style="width: 150px;">Mã đối tượng</th>
+            <th class="text-center" style="width: 90px;">Quy luật</th>
         </tr>`;
     } else {
         thead.innerHTML = `<tr>
@@ -2191,7 +2375,7 @@ function renderPreviewRows(rows) {
         </tr>`;
     }
 
-    const colCount = previewMode === 'asp' ? 6 : 4;
+    const colCount = previewMode === 'asp' ? 7 : 4;
     if (!rows.length) {
         tbody.innerHTML = `<tr><td colspan="${colCount}" class="text-center" style="color:#888;padding:24px;">Không có dữ liệu giao dịch phù hợp</td></tr>`;
         return;
@@ -2209,9 +2393,10 @@ function renderPreviewRows(rows) {
                 <td class="text-center"><b>${r.Ngay}</b></td>
                 <td class="text-right debit">${noDisp}</td>
                 <td class="text-right credit">${coDisp}</td>
-                <td>${r.MoTa}</td>
+                <td>${r.MoTa}${r.DoiTac ? `<div style="font-size:11.5px;color:#7a8599;margin-top:2px;">Đối ứng: ${r.DoiTac}</div>` : ''}</td>
                 <td><input class="cell-input tk-badge" value="${r.TK || ''}" onchange="updateRowField(${origIdx}, 'TK', this.value)" placeholder="Trống"></td>
-                <td><input class="cell-input" value="${r.MaDT || ''}" onchange="updateRowField(${origIdx}, 'MaDT', this.value)" placeholder="Trống"></td>
+                <td><input class="cell-input" list="partnerDatalist" value="${r.MaDT || ''}" onchange="updateRowField(${origIdx}, 'MaDT', this.value)" placeholder="Trống"></td>
+                <td class="text-center"><button class="btn btn-soft btn-xs" onclick="openSaveRuleModal(${origIdx})" title="Lưu quy luật cho các dòng giống vậy và các lần sau">💾 Lưu</button></td>
             `;
         } else {
             tr.innerHTML = `
@@ -2223,6 +2408,89 @@ function renderPreviewRows(rows) {
         }
         tbody.appendChild(tr);
     });
+}
+
+function suggestRuleKeyword(row) {
+    // Uu tien goi y tu cot DoiTac (tru tien mat)
+    let dt = (row.DoiTac || '').split('–')[0].split('- A/C')[0].split('A/C:')[0].trim();
+    if (dt && !dt.toLowerCase().includes('tien mat') && dt.length >= 3) return dt;
+    // Neu khong co DoiTac, lam sach chuoi MoTa de goi y ten nguoi / cong ty
+    let m = (row.MoTa || '').replace(/CT nhanh 247 (den|di):/i, '').replace(/chuyen tien|nop tien|rut tien/gi, '').trim();
+    return m.slice(0, 45).trim() || row.MoTa;
+}
+
+function openSaveRuleModal(origIdx) {
+    const s = allSheetsData[activeIdx];
+    const row = s.rows[origIdx];
+    ruleTargetCompCode = s.company_code || selectedCompanyCode;
+    if (!ruleTargetCompCode || !sharedDB.companies[ruleTargetCompCode]) {
+        alert('File sao kê này chưa gắn với Công ty nào. Vui lòng chọn Công ty ở ô phía trên trước!');
+        return;
+    }
+    const isCo = row.Co && row.Co !== '0';
+    document.getElementById('ruleCompBadge').innerText = ruleTargetCompCode;
+    document.getElementById('ruleRowContext').innerHTML = `<b>Diễn giải:</b> ${row.MoTa}` + (row.DoiTac ? `<br><b>Đối ứng:</b> ${row.DoiTac}` : '');
+    document.getElementById('ruleKeyword').value = suggestRuleKeyword(row);
+    document.getElementById('ruleDirection').value = isCo ? 'in' : 'out';
+    document.getElementById('ruleTK').value = row.TK || '';
+    document.getElementById('ruleMaDT').value = row.MaDT || '';
+    document.getElementById('ruleAlsoOwner').checked = false;
+    document.getElementById('modalSaveRule').style.display = 'flex';
+}
+
+function onToggleOwnerRule() {
+    if (document.getElementById('ruleAlsoOwner').checked) {
+        document.getElementById('ruleTK').value = '1111';
+        document.getElementById('ruleMaDT').value = '';
+    }
+}
+
+function normalizeForMatch(s) {
+    return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+}
+
+async function confirmSaveRule() {
+    const kw = document.getElementById('ruleKeyword').value.trim();
+    const dir = document.getElementById('ruleDirection').value;
+    const tk = document.getElementById('ruleTK').value.trim();
+    const madt = document.getElementById('ruleMaDT').value.trim();
+    const isOwner = document.getElementById('ruleAlsoOwner').checked;
+
+    if (!kw) { alert('Vui lòng nhập Từ khóa nhận diện!'); return; }
+    const comp = sharedDB.companies[ruleTargetCompCode];
+
+    if (isOwner) {
+        if (!comp.owners) comp.owners = [];
+        if (!comp.owners.includes(kw)) comp.owners.push(kw);
+    } else {
+        if (!comp.rules) comp.rules = [];
+        // Cap nhat neu da co rule cung keyword + direction
+        const existingIdx = comp.rules.findIndex(r => r.keyword.toLowerCase() === kw.toLowerCase() && r.direction === dir);
+        if (existingIdx !== -1) comp.rules[existingIdx] = { keyword: kw, direction: dir, tk, madt };
+        else comp.rules.push({ keyword: kw, direction: dir, tk, madt });
+    }
+
+    // Ap dung ngay cho TAT CA cac dong khop trong sheet hien tai
+    const kwNorm = normalizeForMatch(kw);
+    let updatedCount = 0;
+    allSheetsData.forEach(sheet => {
+        if ((sheet.company_code || selectedCompanyCode) !== ruleTargetCompCode) return;
+        sheet.rows.forEach(r => {
+            const rowText = normalizeForMatch((r.MoTa || '') + ' ' + (r.DoiTac || ''));
+            const rowDir = (r.Co && r.Co !== '0') ? 'in' : 'out';
+            if (rowText.includes(kwNorm) && (isOwner || dir === 'both' || dir === rowDir)) {
+                r.TK = isOwner ? '1111' : tk;
+                r.MaDT = isOwner ? '' : madt;
+                updatedCount++;
+            }
+        });
+    });
+
+    closeModal('modalSaveRule');
+    updateCompanyUI();
+    filterPreview();
+    await persistDBToServer();
+    alert(`✅ Đã lưu quy luật "${kw}" và tự động cập nhật ${updatedCount} dòng trên bảng! Các lần sau sẽ tự động áp dụng.`);
 }
 
 async function downloadExcel(mode) {
@@ -2294,7 +2562,6 @@ def process_files():
     shared_db = load_shared_db()
     companies_map = shared_db.get("companies", {})
 
-    # Xay dung bang tra cuu dong: So tai khoan -> Ma cong ty tu du lieu da luu tren Web
     acc_to_comp = {}
     for c_code, c_obj in companies_map.items():
         for acc_item in c_obj.get("accounts", []):
@@ -2319,12 +2586,13 @@ def process_files():
             hi = res.get('header_info', {})
             acc_no = str(hi.get('account_no', '') or '').strip()
 
-            # Chi dung dung danh sach KH/NCC cua chinh cong ty co so TK nay (hoac cong ty duoc chon)
             comp_code = acc_to_comp.get(acc_no, "") or fallback_comp_code
             comp_obj = companies_map.get(comp_code, {})
             owner_name = hi.get('customer') or hi.get('account_name') or comp_obj.get('name', '')
             customers = comp_obj.get("customers", [])
             suppliers = comp_obj.get("suppliers", [])
+            owners = comp_obj.get("owners", [])
+            rules = comp_obj.get("rules", [])
             bank_code = _resolve_bank_partner_code(res.get('bank'), res.get('source_file', ''))
 
             t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
@@ -2350,13 +2618,15 @@ def process_files():
                 co_v = to_num(r['Co'])
                 tk_doi_ung, ma_dt = classify_for_asp(
                     r, owner_name=owner_name, owner_code=comp_code, owner_acc=acc_no,
-                    customers=customers, suppliers=suppliers, bank_code=bank_code, acc_to_comp=acc_to_comp
+                    customers=customers, suppliers=suppliers, owners=owners, rules=rules,
+                    bank_code=bank_code, acc_to_comp=acc_to_comp
                 )
                 preview_rows.append({
                     "Ngay": r['Ngay'],
                     "No": f"{no_v:,.0f}" if no_v != 0 else "0",
                     "Co": f"{co_v:,.0f}" if co_v != 0 else "0",
                     "MoTa": r['MoTa'],
+                    "DoiTac": r.get('DoiTac', ''),
                     "TK": tk_doi_ung,
                     "MaDT": ma_dt
                 })
