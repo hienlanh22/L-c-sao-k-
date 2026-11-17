@@ -1496,4 +1496,901 @@ HTML_UI = r"""<!DOCTYPE html>
             text-align: center; border-radius: 16px; cursor: pointer; margin-bottom: 18px; transition: all 0.2s ease;
         }
         .upload-zone:hover { background: #e9f1ff; border-color: #779be8; transform: translateY(-1px); }
-        .controls { display: flex; g
+        .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+        input[type="password"], input[type="text"] {
+            padding: 10px 14px; border: 1.5px solid #d9e2f2; border-radius: 10px;
+            font-size: 13.5px; background: #fbfcff; color: #3d485c; outline: none;
+        }
+        input:focus { border-color: #8eb0f2; }
+
+        .btn {
+            padding: 10px 20px; border: none; border-radius: 12px; font-weight: 700; font-size: 13.5px;
+            cursor: pointer; text-decoration: none; display: inline-block; transition: all 0.15s ease; transform: translateY(0);
+        }
+        .btn-sm { padding: 7px 12px; font-size: 12px; border-radius: 9px; }
+        .btn-primary {
+            background: linear-gradient(180deg, #91b3fa 0%, #769ce9 100%); color: #fff;
+            box-shadow: 0 5px 0 #5b7fc9, 0 8px 16px rgba(118, 156, 233, 0.32);
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #5b7fc9, 0 12px 20px rgba(118, 156, 233, 0.38); }
+        .btn-primary:active { transform: translateY(3px); box-shadow: 0 2px 0 #5b7fc9, 0 4px 8px rgba(118, 156, 233, 0.25); }
+
+        .btn-download {
+            background: linear-gradient(180deg, #83ddb8 0%, #63c79e 100%); color: #164f38;
+            box-shadow: 0 5px 0 #48a67f, 0 8px 16px rgba(99, 199, 158, 0.32);
+        }
+        .btn-download:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #48a67f, 0 12px 20px rgba(99, 199, 158, 0.40); }
+        .btn-download:active { transform: translateY(3px); box-shadow: 0 2px 0 #48a67f, 0 4px 8px rgba(99, 199, 158, 0.25); }
+
+        .btn-asp {
+            background: linear-gradient(180deg, #c2aff7 0%, #a58ee8 100%); color: #fff;
+            box-shadow: 0 5px 0 #8269c9, 0 8px 16px rgba(165, 142, 232, 0.34);
+        }
+        .btn-asp:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #8269c9, 0 12px 20px rgba(165, 142, 232, 0.42); }
+        .btn-asp:active { transform: translateY(3px); box-shadow: 0 2px 0 #8269c9, 0 4px 8px rgba(165, 142, 232, 0.25); }
+
+        .btn-soft {
+            background: linear-gradient(180deg, #ffffff 0%, #f1f4fb 100%); color: #4b5d7a;
+            border: 1px solid #d9e1f2; box-shadow: 0 3px 0 #d0d8ea;
+        }
+        .btn-soft:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #c3cde3; }
+        .btn-soft:active { transform: translateY(2px); box-shadow: 0 1px 0 #c3cde3; }
+
+        .btn-mint {
+            background: linear-gradient(180deg, #b8f0d8 0%, #90dfb9 100%); color: #164f38;
+            box-shadow: 0 3px 0 #68bf96;
+        }
+        .btn-mint:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #68bf96; }
+        .btn-mint:active { transform: translateY(2px); box-shadow: 0 1px 0 #68bf96; }
+
+        .btn-peach {
+            background: linear-gradient(180deg, #ffd4be 0%, #f8b799 100%); color: #693018;
+            box-shadow: 0 3px 0 #dc9372;
+        }
+        .btn-peach:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #dc9372; }
+        .btn-peach:active { transform: translateY(2px); box-shadow: 0 1px 0 #dc9372; }
+
+        .tab-btn {
+            padding: 9px 16px; border: 1px solid #dce3f0; background: #f5f7fc; color: #4b5d7a;
+            border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600;
+            box-shadow: 0 3px 0 #d5dceb; transition: all 0.15s ease;
+        }
+        .tab-btn:hover { transform: translateY(-1px); background: #ebf0fb; box-shadow: 0 4px 0 #c9d2e6; }
+        .tab-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #c9d2e6; }
+        .tab-btn.active {
+            background: linear-gradient(180deg, #b8a9f5 0%, #9c8be8 100%); color: #fff;
+            border-color: #8b78db; box-shadow: 0 3px 0 #7562c7, 0 5px 10px rgba(156, 139, 232, 0.28);
+        }
+
+        .mode-switch { display: inline-flex; gap: 8px; background: #f2f5fc; padding: 6px; border-radius: 12px; border: 1px solid #e1e8f5; }
+        .mode-pill { padding: 7px 14px; border-radius: 8px; border: none; background: transparent; color: #5b6982; font-weight: 600; font-size: 13px; cursor: pointer; }
+        .mode-pill.active { background: #fff; color: #4b659e; box-shadow: 0 2px 6px rgba(91, 127, 201, 0.18); }
+
+        #fileList { margin: 10px 0 0 0; font-size: 13px; color: #5b7fc9; font-weight: 600; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
+        th, td { border: 1px solid #e6ebf5; padding: 9px 11px; text-align: left; }
+        th { background: #e4ecfc; color: #364b75; font-weight: 700; position: sticky; top: 0; z-index: 2; }
+        tbody tr:nth-child(even) { background: #fafbfe; }
+        tbody tr:hover { background: #f2f6ff; }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .debit { color: #d45b68; font-weight: 600; }
+        .credit { color: #39996d; font-weight: 600; }
+        .ok { background: #e6f9ef; color: #227850; font-weight: 700; padding: 4px 10px; border-radius: 6px; display: inline-block; }
+        .warn { background: #fde9eb; color: #b8424d; font-weight: 700; padding: 4px 10px; border-radius: 6px; display: inline-block; }
+        .loader { display: none; color: #6787cc; font-weight: 700; margin: 14px 0; }
+        .preview-section { margin-top: 26px; border-top: 2px dashed #e8edf7; padding-top: 20px; }
+        .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+        .preview-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+        .scroll-box { max-height: 500px; overflow: auto; border: 1px solid #e1e7f2; border-radius: 12px; }
+        .cell-input { width: 100%; padding: 5px 8px; border: 1px solid #dde4f2; border-radius: 6px; font-size: 12.5px; background: #fcfdff; color: #3d485c; }
+        .cell-input:focus { border-color: #9c8be8; background: #fff; outline: none; }
+        .tk-badge { text-align: center; font-weight: 700; color: #5b48a8; }
+
+        /* MODAL PASTEL */
+        .modal-backdrop {
+            display: none; position: fixed; inset: 0; background: rgba(50, 62, 90, 0.4);
+            backdrop-filter: blur(3px); z-index: 999; align-items: center; justify-content: center; padding: 16px;
+        }
+        .modal-box {
+            background: #fff; border-radius: 18px; padding: 24px; width: 100%; max-width: 520px;
+            box-shadow: 0 20px 50px rgba(60, 75, 110, 0.25); border: 1px solid #e5ebf7;
+        }
+        .modal-box.wide { max-width: 820px; }
+        .modal-title { font-size: 18px; font-weight: 700; color: #4b659e; margin: 0 0 14px 0; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: #4b5d7a; }
+        .form-group input, .form-group select { width: 100%; padding: 9px 12px; border: 1.5px solid #d9e2f2; border-radius: 10px; font-size: 13.5px; }
+        .modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
+    <div class="subtitle">
+        Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • Công ty nào chỉ dùng đúng danh sách Khách hàng, NCC của công ty đó để tránh nhầm lẫn.
+    </div>
+
+    <!-- KHU VUC QUAN LY CONG TY, SO TAI KHOAN & DANH SACH KH/NCC -->
+    <div class="partner-card">
+        <div class="partner-header">
+            <div style="font-weight: 700; color: #574699; font-size: 15px;">
+                🏢 Quản lý Công ty, Số tài khoản NH &amp; Danh bạ Khách hàng / Nhà cung cấp
+            </div>
+            <div id="syncBadge" style="font-size: 12px; color: #1f704b; font-weight: 600;"></div>
+        </div>
+
+        <div class="partner-row" style="margin-bottom: 8px;">
+            <label style="font-weight: 600; font-size: 13px;">Công ty:</label>
+            <select id="companySelect" onchange="onSelectCompany()"></select>
+            <button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()">➕ Thêm mới Công ty</button>
+            <button class="btn btn-soft btn-sm" onclick="openAddAccountModal()">🏦 Thêm TK Ngân hàng</button>
+            <button class="btn btn-peach btn-sm" onclick="deleteCompany()">🗑️ Xóa CT</button>
+        </div>
+
+        <div id="accChipsBox" class="acc-chips"></div>
+
+        <div class="partner-row" style="margin-top: 10px;">
+            <div class="partner-group">
+                <span id="khStatus" class="badge-count badge-empty">0 Khách hàng</span>
+                <input type="file" id="upKhReplace" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', 'replace', this)">
+                <input type="file" id="upKhUpdate" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', 'update', this)">
+                <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upKhReplace')">📥 Nạp mới DS KH</button>
+                <button class="btn btn-mint btn-sm" onclick="triggerPartnerUpload('upKhUpdate')" title="Thêm KH mới & cập nhật tên/MST nếu trùng mã, không làm mất KH cũ">🔄 Update DS KH</button>
+                <button class="btn btn-soft btn-sm" onclick="openViewPartnersModal('customers')">👁️ Xem</button>
+            </div>
+
+            <div class="partner-group">
+                <span id="nccStatus" class="badge-count badge-empty">0 Nhà cung cấp</span>
+                <input type="file" id="upNccReplace" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', 'replace', this)">
+                <input type="file" id="upNccUpdate" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', 'update', this)">
+                <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upNccReplace')">📥 Nạp mới DS NCC</button>
+                <button class="btn btn-mint btn-sm" onclick="triggerPartnerUpload('upNccUpdate')" title="Thêm NCC mới & cập nhật tên/MST nếu trùng mã, không làm mất NCC cũ">🔄 Update DS NCC</button>
+                <button class="btn btn-soft btn-sm" onclick="openViewPartnersModal('suppliers')">👁️ Xem</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="upload-zone" onclick="document.getElementById('files').click()">
+        <input type="file" id="files" multiple accept=".pdf,.html,.htm,.xlsx,.xls,.csv" style="display:none" onchange="showFiles()">
+        <div style="font-size: 16px; font-weight: bold; color: #5b7fc9;">📂 Bấm vào đây để chọn 1 hoặc nhiều file sao kê</div>
+        <div id="fileList"></div>
+    </div>
+
+    <div class="controls">
+        <input type="password" id="pwd" style="width: 320px; max-width: 100%;" placeholder="🔑 Mật khẩu file PDF (nếu có)">
+        <button class="btn btn-primary" onclick="uploadAndProcess()">✨ BẮT ĐẦU TRÍCH XUẤT &amp; XEM TRƯỚC</button>
+    </div>
+
+    <div id="loader" class="loader">⏳ Đang trích xuất, đối chiếu số dư và ghép mã đối tượng theo đúng công ty...</div>
+
+    <div id="resultBox" style="display:none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
+            <h3 style="margin: 0; color: #4b659e;">📊 Bảng Đối Chiếu Tổng Quan</h3>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <button class="btn btn-download" onclick="downloadExcel('4col')">📥 Tải Excel (4 cột)</button>
+                <button class="btn btn-asp" onclick="downloadExcel('asp')">📘 Kết xuất cho ASP (.xlsx)</button>
+            </div>
+        </div>
+
+        <div style="border-radius: 12px; overflow: hidden; border: 1px solid #e6ebf5;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>File nguồn</th><th>Ngân hàng</th><th>Số TK</th>
+                        <th class="text-right">Số GD</th><th class="text-right">Tổng Nợ</th>
+                        <th class="text-right">Tổng Có</th><th>Đối chiếu</th>
+                    </tr>
+                </thead>
+                <tbody id="summaryBody"></tbody>
+            </table>
+        </div>
+
+        <div class="preview-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                <h3 style="margin: 0; color: #4b659e;">🔍 Xem Trước &amp; Chỉnh Sửa Trước Khi Tải</h3>
+                <div class="mode-switch">
+                    <button id="btnMode4" class="mode-pill" onclick="switchPreviewMode('4col')">Mẫu 4 cột</button>
+                    <button id="btnModeAsp" class="mode-pill active" onclick="switchPreviewMode('asp')">Kết xuất cho ASP (6 cột)</button>
+                </div>
+            </div>
+
+            <div id="tabs" class="tabs"></div>
+
+            <div class="preview-toolbar">
+                <div id="sheetMeta" style="font-size: 13px; color: #5b6982; font-weight: 500;"></div>
+                <input type="text" id="searchBox" style="width: 300px;" placeholder="🔎 Tìm ngày, số tiền, diễn giải, TK, mã..." oninput="filterPreview()">
+            </div>
+
+            <div class="scroll-box">
+                <table>
+                    <thead id="previewHead"></thead>
+                    <tbody id="previewBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL 1: THEM MOI CONG TY & TAI KHOAN NGAN HANG -->
+<div id="modalAddCompany" class="modal-backdrop">
+    <div class="modal-box">
+        <div class="modal-title">➕ Thêm mới Công ty &amp; Tài khoản Ngân hàng</div>
+        <div class="form-group">
+            <label>Tên công ty (*):</label>
+            <input type="text" id="newCompName" placeholder="VD: CÔNG TY TNHH ABC">
+        </div>
+        <div class="form-group">
+            <label>Mã công ty - viết liền không dấu (*):</label>
+            <input type="text" id="newCompCode" placeholder="VD: congtyabc">
+        </div>
+        <div class="form-group">
+            <label>Ngân hàng:</label>
+            <select id="newCompBank">
+                <option value="Vietinbank">Vietinbank</option>
+                <option value="BIDV">BIDV</option>
+                <option value="LPBank">LPBank</option>
+                <option value="ACB">ACB</option>
+                <option value="MB">MBBank</option>
+                <option value="Agribank">Agribank</option>
+                <option value="Sacombank">Sacombank</option>
+                <option value="Vietcombank">Vietcombank</option>
+                <option value="VPBank">VPBank</option>
+                <option value="MSB">MSB</option>
+                <option value="NCB">NCB</option>
+                <option value="Co-op Bank">Co-op Bank</option>
+                <option value="Khác">Ngân hàng khác</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Số tài khoản ngân hàng (có thể để trống và thêm sau):</label>
+            <input type="text" id="newCompAcc" placeholder="VD: 118003052315">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-soft btn-sm" onclick="closeModal('modalAddCompany')">Hủy</button>
+            <button class="btn btn-primary btn-sm" onclick="saveNewCompany()">💾 Lưu Công ty</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL 2: THEM TAI KHOAN NGAN HANG CHO CONG TY DANG CHON -->
+<div id="modalAddAccount" class="modal-backdrop">
+    <div class="modal-box">
+        <div class="modal-title">🏦 Thêm Tài khoản Ngân hàng</div>
+        <div style="font-size: 13px; color: #5b6982; margin-bottom: 12px;">Công ty: <b id="accModalCompName"></b></div>
+        <div class="form-group">
+            <label>Ngân hàng:</label>
+            <select id="addAccBank">
+                <option value="Vietinbank">Vietinbank</option>
+                <option value="BIDV">BIDV</option>
+                <option value="LPBank">LPBank</option>
+                <option value="ACB">ACB</option>
+                <option value="MB">MBBank</option>
+                <option value="Agribank">Agribank</option>
+                <option value="Sacombank">Sacombank</option>
+                <option value="Vietcombank">Vietcombank</option>
+                <option value="VPBank">VPBank</option>
+                <option value="MSB">MSB</option>
+                <option value="NCB">NCB</option>
+                <option value="Co-op Bank">Co-op Bank</option>
+                <option value="Khác">Ngân hàng khác</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Số tài khoản (*):</label>
+            <input type="text" id="addAccNumber" placeholder="Nhập số tài khoản ngân hàng...">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-soft btn-sm" onclick="closeModal('modalAddAccount')">Hủy</button>
+            <button class="btn btn-primary btn-sm" onclick="saveNewAccount()">💾 Lưu Số TK</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL 3: XEM / TIM KIEM / XOA DANH SACH KHACH HANG HOAC NCC -->
+<div id="modalViewPartners" class="modal-backdrop">
+    <div class="modal-box wide">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
+            <div class="modal-title" id="viewPartnersTitle" style="margin:0;"></div>
+            <input type="text" id="viewPartnersSearch" style="width:240px; padding:7px 10px;" placeholder="🔎 Tìm mã hoặc tên..." oninput="renderPartnerModalRows()">
+        </div>
+        <div class="scroll-box" style="max-height:380px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="text-center" style="width:50px;">STT</th>
+                        <th style="width:150px;">Mã đối tượng</th>
+                        <th>Tên Khách hàng / Nhà cung cấp</th>
+                        <th style="width:130px;">Mã số thuế</th>
+                        <th class="text-center" style="width:65px;">Xóa</th>
+                    </tr>
+                </thead>
+                <tbody id="viewPartnersBody"></tbody>
+            </table>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary btn-sm" onclick="closeModal('modalViewPartners')">Đóng</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let sharedDB = { companies: {} };
+let selectedCompanyCode = '';
+let allSheetsData = [];
+let activeIdx = 0;
+let previewMode = 'asp';
+let viewingRoleKey = 'customers';
+
+async function loadSharedDB() {
+    try {
+        const res = await fetch('/api/partners');
+        const data = await res.json();
+        sharedDB = data.db || { companies: {} };
+        if (!selectedCompanyCode && sharedDB.companies['lanhien']) {
+            selectedCompanyCode = 'lanhien';
+        }
+        renderCompanyDropdown();
+    } catch (e) { console.error(e); }
+}
+
+function renderCompanyDropdown() {
+    const sel = document.getElementById('companySelect');
+    sel.innerHTML = '<option value="">-- Tự động nhận diện theo Số tài khoản --</option>';
+    Object.values(sharedDB.companies || {})
+        .sort((a, b) => (a.code || '').localeCompare(b.code || ''))
+        .forEach(c => {
+            let opt = document.createElement('option');
+            opt.value = c.code;
+            opt.text = `[${c.code}] ${c.name}`;
+            sel.appendChild(opt);
+        });
+    sel.value = (selectedCompanyCode && sharedDB.companies[selectedCompanyCode]) ? selectedCompanyCode : '';
+    updateCompanyUI();
+}
+
+function updateCompanyUI() {
+    const comp = sharedDB.companies[selectedCompanyCode];
+    const khEl = document.getElementById('khStatus');
+    const nccEl = document.getElementById('nccStatus');
+    const accBox = document.getElementById('accChipsBox');
+
+    if (!comp) {
+        khEl.innerText = '0 Khách hàng'; khEl.className = 'badge-count badge-empty';
+        nccEl.innerText = '0 Nhà cung cấp'; nccEl.className = 'badge-count badge-empty';
+        accBox.innerHTML = '<span style="font-size:12px;color:#7c879c;">💡 Đang ở chế độ tự nhận diện Công ty theo Số TK của từng file sao kê tải lên.</span>';
+        return;
+    }
+
+    const khCnt = (comp.customers || []).length;
+    const nccCnt = (comp.suppliers || []).length;
+    khEl.innerText = `${khCnt} Khách hàng`;
+    khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+    nccEl.innerText = `${nccCnt} Nhà cung cấp`;
+    nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
+
+    const accs = comp.accounts || [];
+    if (!accs.length) {
+        accBox.innerHTML = '<span style="font-size:12px;color:#8892a6;">Chưa gắn số tài khoản ngân hàng nào.</span>';
+    } else {
+        accBox.innerHTML = '<span style="font-size:12px;font-weight:600;color:#5b6982;">Số TK đã lưu:</span> ' +
+            accs.map((a, idx) =>
+                `<span class="acc-chip">${a.bank}: <b>${a.account}</b> <button class="acc-del" onclick="removeAccount(${idx})" title="Gỡ số TK này">×</button></span>`
+            ).join('');
+    }
+}
+
+function onSelectCompany() {
+    selectedCompanyCode = document.getElementById('companySelect').value;
+    updateCompanyUI();
+}
+
+async function persistDBToServer() {
+    const res = await fetch('/api/partners/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sharedDB)
+    });
+    const data = await res.json();
+    document.getElementById('syncBadge').innerText = data.message || '✅ Đã lưu';
+}
+
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+function openAddCompanyModal() {
+    document.getElementById('newCompName').value = '';
+    document.getElementById('newCompCode').value = '';
+    document.getElementById('newCompAcc').value = '';
+    document.getElementById('modalAddCompany').style.display = 'flex';
+}
+
+async function saveNewCompany() {
+    const name = document.getElementById('newCompName').value.trim();
+    const code = document.getElementById('newCompCode').value.trim().toLowerCase().replace(/\s+/g, '');
+    const bank = document.getElementById('newCompBank').value;
+    const acc = document.getElementById('newCompAcc').value.trim();
+
+    if (!name || !code) { alert('Vui lòng nhập đầy đủ Tên công ty và Mã công ty!'); return; }
+    if (!sharedDB.companies[code]) {
+        sharedDB.companies[code] = { code, name, accounts: [], customers: [], suppliers: [] };
+    } else {
+        sharedDB.companies[code].name = name;
+    }
+    if (acc) {
+        const exists = sharedDB.companies[code].accounts.some(a => a.account === acc);
+        if (!exists) sharedDB.companies[code].accounts.push({ bank, account: acc });
+    }
+    selectedCompanyCode = code;
+    closeModal('modalAddCompany');
+    renderCompanyDropdown();
+    await persistDBToServer();
+}
+
+function openAddAccountModal() {
+    if (!selectedCompanyCode || !sharedDB.companies[selectedCompanyCode]) {
+        alert('Hãy chọn một công ty ở ô phía trên trước khi thêm số TK!');
+        return;
+    }
+    document.getElementById('accModalCompName').innerText = `[${selectedCompanyCode}] ${sharedDB.companies[selectedCompanyCode].name}`;
+    document.getElementById('addAccNumber').value = '';
+    document.getElementById('modalAddAccount').style.display = 'flex';
+}
+
+async function saveNewAccount() {
+    const bank = document.getElementById('addAccBank').value;
+    const acc = document.getElementById('addAccNumber').value.trim();
+    if (!acc) { alert('Vui lòng nhập Số tài khoản!'); return; }
+    const comp = sharedDB.companies[selectedCompanyCode];
+    if (!comp.accounts) comp.accounts = [];
+    if (!comp.accounts.some(a => a.account === acc)) {
+        comp.accounts.push({ bank, account: acc });
+    }
+    closeModal('modalAddAccount');
+    updateCompanyUI();
+    await persistDBToServer();
+}
+
+async function removeAccount(idx) {
+    const comp = sharedDB.companies[selectedCompanyCode];
+    if (!comp || !comp.accounts) return;
+    if (!confirm(`Gỡ số tài khoản ${comp.accounts[idx].account} khỏi [${selectedCompanyCode}]?`)) return;
+    comp.accounts.splice(idx, 1);
+    updateCompanyUI();
+    await persistDBToServer();
+}
+
+async function deleteCompany() {
+    if (!selectedCompanyCode) { alert('Hãy chọn một công ty để xóa!'); return; }
+    if (!confirm(`Bạn có chắc muốn xóa toàn bộ danh bạ của [${selectedCompanyCode}]?`)) return;
+    delete sharedDB.companies[selectedCompanyCode];
+    selectedCompanyCode = '';
+    renderCompanyDropdown();
+    await persistDBToServer();
+}
+
+function triggerPartnerUpload(inputId) {
+    if (!selectedCompanyCode) {
+        alert('Vui lòng chọn Công ty ở ô thả xuống phía trên trước khi nạp hoặc Update danh sách!');
+        return;
+    }
+    document.getElementById(inputId).click();
+}
+
+async function uploadPartnerList(roleKey, actionMode, inputEl) {
+    if (!inputEl.files.length || !selectedCompanyCode) return;
+    const fd = new FormData();
+    fd.append('file', inputEl.files[0]);
+    try {
+        const res = await fetch('/parse_partners', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+
+        const incoming = data.items || [];
+        const label = roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp';
+
+        if (actionMode === 'replace') {
+            sharedDB.companies[selectedCompanyCode][roleKey] = incoming;
+            updateCompanyUI();
+            await persistDBToServer();
+            alert(`✅ Đã nạp mới ${incoming.length} ${label} cho [${selectedCompanyCode}]!`);
+        } else {
+            // Update: Them moi & cap nhat theo ma (khong lam mat du lieu cu)
+            const current = sharedDB.companies[selectedCompanyCode][roleKey] || [];
+            const mapByCode = new Map();
+            current.forEach((item, idx) => mapByCode.set(item.code.toLowerCase(), idx));
+
+            let added = 0, updated = 0;
+            incoming.forEach(item => {
+                const k = item.code.toLowerCase();
+                if (mapByCode.has(k)) {
+                    current[mapByCode.get(k)] = item;
+                    updated++;
+                } else {
+                    mapByCode.set(k, current.length);
+                    current.push(item);
+                    added++;
+                }
+            });
+            sharedDB.companies[selectedCompanyCode][roleKey] = current;
+            updateCompanyUI();
+            await persistDBToServer();
+            alert(`🔄 Đã Update DS ${label} cho [${selectedCompanyCode}]: Thêm mới ${added}, cập nhật ${updated} mục (Tổng: ${current.length})!`);
+        }
+    } catch (e) {
+        alert('Lỗi khi đọc file danh sách: ' + e);
+    } finally {
+        inputEl.value = '';
+    }
+}
+
+function openViewPartnersModal(roleKey) {
+    if (!selectedCompanyCode || !sharedDB.companies[selectedCompanyCode]) {
+        alert('Vui lòng chọn một công ty để xem danh sách!');
+        return;
+    }
+    viewingRoleKey = roleKey;
+    const label = roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp';
+    document.getElementById('viewPartnersTitle').innerText = `📋 Danh sách ${label} - [${selectedCompanyCode}]`;
+    document.getElementById('viewPartnersSearch').value = '';
+    renderPartnerModalRows();
+    document.getElementById('modalViewPartners').style.display = 'flex';
+}
+
+function renderPartnerModalRows() {
+    const comp = sharedDB.companies[selectedCompanyCode];
+    const list = (comp && comp[viewingRoleKey]) ? comp[viewingRoleKey] : [];
+    const kw = document.getElementById('viewPartnersSearch').value.trim().toLowerCase();
+    const tbody = document.getElementById('viewPartnersBody');
+    tbody.innerHTML = '';
+
+    const filtered = list.map((item, idx) => ({ ...item, _idx: idx }))
+        .filter(it => !kw || it.code.toLowerCase().includes(kw) || it.name.toLowerCase().includes(kw) || (it.mst || '').includes(kw));
+
+    if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center" style="color:#888;padding:20px;">Chưa có dữ liệu</td></tr>';
+        return;
+    }
+    filtered.forEach((it, i) => {
+        let tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td class="text-center">${i + 1}</td>
+            <td><b>${it.code}</b></td>
+            <td>${it.name}</td>
+            <td>${it.mst || ''}</td>
+            <td class="text-center"><button class="btn btn-peach btn-sm" style="padding:3px 8px;" onclick="deletePartnerItem(${it._idx})">×</button></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+async function deletePartnerItem(origIdx) {
+    const comp = sharedDB.companies[selectedCompanyCode];
+    if (!comp || !comp[viewingRoleKey]) return;
+    comp[viewingRoleKey].splice(origIdx, 1);
+    renderPartnerModalRows();
+    updateCompanyUI();
+    await persistDBToServer();
+}
+
+function showFiles() {
+    const inp = document.getElementById('files');
+    const names = Array.from(inp.files).map(f => f.name);
+    document.getElementById('fileList').innerText = names.length ? `Đã chọn ${names.length} file: ${names.join(', ')}` : '';
+}
+
+async function uploadAndProcess() {
+    const inp = document.getElementById('files');
+    if (!inp.files.length) { alert('Vui lòng chọn ít nhất 1 file sao kê!'); return; }
+
+    const formData = new FormData();
+    for (let f of inp.files) formData.append('files', f);
+    formData.append('password', document.getElementById('pwd').value);
+    formData.append('fallback_company_code', selectedCompanyCode);
+
+    document.getElementById('loader').style.display = 'block';
+    document.getElementById('resultBox').style.display = 'none';
+
+    try {
+        const res = await fetch('/process', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+
+        const tbody = document.getElementById('summaryBody');
+        tbody.innerHTML = '';
+        data.summary.forEach(r => {
+            let tr = document.createElement('tr');
+            let cls = r.status === 'Khớp chuẩn' ? 'ok' : 'warn';
+            tr.innerHTML = `<td>${r.file}</td><td><b>${r.bank}</b></td><td>${r.account}</td>
+                <td class="text-right">${r.count}</td><td class="text-right debit">${r.debit}</td>
+                <td class="text-right credit">${r.credit}</td><td><span class="${cls}">${r.status}</span></td>`;
+            tbody.appendChild(tr);
+        });
+
+        allSheetsData = data.sheets || [];
+        renderTabs();
+        document.getElementById('resultBox').style.display = 'block';
+    } catch (e) {
+        alert('Có lỗi xảy ra: ' + e);
+    } finally {
+        document.getElementById('loader').style.display = 'none';
+    }
+}
+
+function switchPreviewMode(mode) {
+    previewMode = mode;
+    document.getElementById('btnMode4').classList.toggle('active', mode === '4col');
+    document.getElementById('btnModeAsp').classList.toggle('active', mode === 'asp');
+    filterPreview();
+}
+
+function renderTabs() {
+    const tabsEl = document.getElementById('tabs');
+    tabsEl.innerHTML = '';
+    allSheetsData.forEach((s, idx) => {
+        let btn = document.createElement('button');
+        btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
+        btn.innerText = `${s.file} (${s.rows.length})`;
+        btn.onclick = () => selectTab(idx);
+        tabsEl.appendChild(btn);
+    });
+    if (allSheetsData.length > 0) selectTab(0);
+}
+
+function selectTab(idx) {
+    activeIdx = idx;
+    document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+    document.getElementById('searchBox').value = '';
+    const s = allSheetsData[idx];
+    document.getElementById('sheetMeta').innerHTML =
+        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Dùng danh bạ công ty: <b>[${s.company_code || 'chưa gắn'}] ${s.customer || ''}</b> • Giao dịch: <b>${s.rows.length}</b>`;
+    renderPreviewRows(s.rows);
+}
+
+function filterPreview() {
+    const kw = document.getElementById('searchBox').value.trim().toLowerCase();
+    const rows = allSheetsData[activeIdx]?.rows || [];
+    if (!kw) { renderPreviewRows(rows); return; }
+    const filtered = rows.filter(r =>
+        (r.Ngay || '').toLowerCase().includes(kw) ||
+        (r.MoTa || '').toLowerCase().includes(kw) ||
+        (r.No || '').toLowerCase().includes(kw) ||
+        (r.Co || '').toLowerCase().includes(kw) ||
+        (r.TK || '').toLowerCase().includes(kw) ||
+        (r.MaDT || '').toLowerCase().includes(kw)
+    );
+    renderPreviewRows(filtered);
+}
+
+function updateRowField(rowObjIndex, field, value) {
+    if (allSheetsData[activeIdx] && allSheetsData[activeIdx].rows[rowObjIndex]) {
+        allSheetsData[activeIdx].rows[rowObjIndex][field] = value.trim();
+    }
+}
+
+function renderPreviewRows(rows) {
+    const thead = document.getElementById('previewHead');
+    const tbody = document.getElementById('previewBody');
+    tbody.innerHTML = '';
+
+    if (previewMode === 'asp') {
+        thead.innerHTML = `<tr>
+            <th class="text-center" style="width: 105px;">Ngày</th>
+            <th class="text-right" style="width: 130px;">Nợ</th>
+            <th class="text-right" style="width: 130px;">Có</th>
+            <th>Diễn giải</th>
+            <th class="text-center" style="width: 120px;">TK đối ứng</th>
+            <th style="width: 155px;">Mã đối tượng</th>
+        </tr>`;
+    } else {
+        thead.innerHTML = `<tr>
+            <th class="text-center" style="width: 115px;">Ngày</th>
+            <th class="text-right" style="width: 145px;">Nợ</th>
+            <th class="text-right" style="width: 145px;">Có</th>
+            <th>Diễn giải</th>
+        </tr>`;
+    }
+
+    const colCount = previewMode === 'asp' ? 6 : 4;
+    if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="${colCount}" class="text-center" style="color:#888;padding:24px;">Không có dữ liệu giao dịch phù hợp</td></tr>`;
+        return;
+    }
+
+    const sourceRows = allSheetsData[activeIdx].rows;
+    rows.forEach(r => {
+        const origIdx = sourceRows.indexOf(r);
+        let tr = document.createElement('tr');
+        let noDisp = (r.No && r.No !== '0') ? r.No : '';
+        let coDisp = (r.Co && r.Co !== '0') ? r.Co : '';
+
+        if (previewMode === 'asp') {
+            tr.innerHTML = `
+                <td class="text-center"><b>${r.Ngay}</b></td>
+                <td class="text-right debit">${noDisp}</td>
+                <td class="text-right credit">${coDisp}</td>
+                <td>${r.MoTa}</td>
+                <td><input class="cell-input tk-badge" value="${r.TK || ''}" onchange="updateRowField(${origIdx}, 'TK', this.value)" placeholder="Trống"></td>
+                <td><input class="cell-input" value="${r.MaDT || ''}" onchange="updateRowField(${origIdx}, 'MaDT', this.value)" placeholder="Trống"></td>
+            `;
+        } else {
+            tr.innerHTML = `
+                <td class="text-center"><b>${r.Ngay}</b></td>
+                <td class="text-right debit">${noDisp}</td>
+                <td class="text-right credit">${coDisp}</td>
+                <td>${r.MoTa}</td>
+            `;
+        }
+        tbody.appendChild(tr);
+    });
+}
+
+async function downloadExcel(mode) {
+    if (!allSheetsData.length) return;
+    try {
+        const res = await fetch('/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: mode, sheets: allSheetsData })
+        });
+        if (!res.ok) { alert('Lỗi khi tạo file Excel'); return; }
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = mode === 'asp' ? 'KetXuat_Cho_ASP.xlsx' : 'SaoKe_4Cot_Chuan.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Lỗi tải file: ' + e);
+    }
+}
+
+loadSharedDB();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/")
+def index():
+    return render_template_string(HTML_UI)
+
+
+@app.route("/api/partners", methods=["GET"])
+def api_get_partners():
+    return jsonify({"db": load_shared_db()})
+
+
+@app.route("/api/partners/save", methods=["POST"])
+def api_save_partners():
+    payload = request.get_json(silent=True) or {}
+    ok, msg = save_shared_db(payload)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/parse_partners", methods=["POST"])
+def parse_partners_route():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "Không có file danh sách được tải lên"}), 400
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            p = os.path.join(tmp_dir, os.path.basename(f.filename))
+            f.save(p)
+            items = parse_partner_excel(p)
+        return jsonify({"items": items})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/process", methods=["POST"])
+def process_files():
+    uploaded = request.files.getlist("files")
+    pwd = request.form.get("password", "").strip() or None
+    fallback_comp_code = request.form.get("fallback_company_code", "").strip()
+    shared_db = load_shared_db()
+    companies_map = shared_db.get("companies", {})
+
+    # Xay dung bang tra cuu dong: So tai khoan -> Ma cong ty tu du lieu da luu tren Web
+    acc_to_comp = {}
+    for c_code, c_obj in companies_map.items():
+        for acc_item in c_obj.get("accounts", []):
+            acc_num = str(acc_item.get("account", "")).strip()
+            if acc_num:
+                acc_to_comp[acc_num] = c_code
+
+    if not uploaded:
+        return jsonify({"error": "Không có file nào được tải lên"}), 400
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        paths = []
+        for f in uploaded:
+            p = os.path.join(tmp_dir, os.path.basename(f.filename))
+            f.save(p)
+            paths.append(p)
+
+        summary, sheets = [], []
+        for p in paths:
+            res = extract_any(p, password=pwd)
+            warns = [] if res.get('loi') else validate(res)
+            hi = res.get('header_info', {})
+            acc_no = str(hi.get('account_no', '') or '').strip()
+
+            # Chi dung dung danh sach KH/NCC cua chinh cong ty co so TK nay (hoac cong ty duoc chon)
+            comp_code = acc_to_comp.get(acc_no, "") or fallback_comp_code
+            comp_obj = companies_map.get(comp_code, {})
+            owner_name = hi.get('customer') or hi.get('account_name') or comp_obj.get('name', '')
+            customers = comp_obj.get("customers", [])
+            suppliers = comp_obj.get("suppliers", [])
+            bank_code = _resolve_bank_partner_code(res.get('bank'), res.get('source_file', ''))
+
+            t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
+            t_cred = to_num(res['total_credit']) if res.get('total_credit') else sum(to_num(x['Co']) for x in res['rows'])
+
+            if res.get('loi'): status = "❌ LỖI: " + res['loi']
+            elif warns: status = "⚠️ CẢNH BÁO: " + " | ".join(warns[:2])
+            else: status = "Khớp chuẩn"
+
+            summary.append({
+                "file": res['source_file'],
+                "bank": str(res['bank']).upper(),
+                "account": acc_no,
+                "count": len(res['rows']),
+                "debit": f"{t_deb:,.0f}",
+                "credit": f"{t_cred:,.0f}",
+                "status": status
+            })
+
+            preview_rows = []
+            for r in res['rows']:
+                no_v = to_num(r['No'])
+                co_v = to_num(r['Co'])
+                tk_doi_ung, ma_dt = classify_for_asp(
+                    r, owner_name=owner_name, owner_code=comp_code, owner_acc=acc_no,
+                    customers=customers, suppliers=suppliers, bank_code=bank_code, acc_to_comp=acc_to_comp
+                )
+                preview_rows.append({
+                    "Ngay": r['Ngay'],
+                    "No": f"{no_v:,.0f}" if no_v != 0 else "0",
+                    "Co": f"{co_v:,.0f}" if co_v != 0 else "0",
+                    "MoTa": r['MoTa'],
+                    "TK": tk_doi_ung,
+                    "MaDT": ma_dt
+                })
+
+            sheets.append({
+                "file": res['source_file'],
+                "bank": str(res['bank']).upper(),
+                "account": acc_no,
+                "customer": owner_name,
+                "company_code": comp_code,
+                "error": res.get('loi'),
+                "rows": preview_rows
+            })
+
+    return jsonify({"summary": summary, "sheets": sheets})
+
+
+@app.route("/export", methods=["POST"])
+def export_excel_route():
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get("mode", "4col")
+    sheets = payload.get("sheets", [])
+    xlsx_bytes = create_workbook_from_sheets(sheets, mode=mode)
+    fname = "KetXuat_Cho_ASP.xlsx" if mode == "asp" else "SaoKe_4Cot_Chuan.xlsx"
+    return send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname
+    )
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    if not os.environ.get("RENDER") and not os.environ.get("PYTHONANYWHERE_DOMAIN"):
+        Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    app.run(host="0.0.0.0", port=port)
