@@ -4,14 +4,9 @@ CONG CU TRICH XUAT SAO KE NGAN HANG
 - PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB, MBBank
 - HTML: VPBank (T24 Core)
 - Excel/CSV: Sacombank, Agribank IPCAS, Excel khac
-- Dinh dang ngay: dd/mm/yyyy
-- Ket xuat 4 cot & Ket xuat cho ASP:
-  + 515: Lai tien gui -> MaDT = ten ngan hang
-  + 6422: Phi ngan hang / chuyen tien -> MaDT = ten ngan hang
-  + 1111: Nop/Rut tien mat, Rut/Chi sec, NGUYEN VAN LAN Chuyen tien -> MaDT trong
-  + 131 / 331: Tu dong nhan dien theo danh ba KH/NCC cua tung cong ty + 16 cong ty trong TaiKhoanNH
-  + Thu goc/lai/lai phat/phi vay, Thue, BHXH, Noi bo, Luong... -> De trong
-- Dong bo danh ba dung chung cho moi may tinh qua GitHub (GITHUB_TOKEN + GITHUB_REPO) hoac Firebase (FIREBASE_DB_URL)
+- Dinh dang ngay chuan: dd/mm/yyyy
+- Quan ly Cong ty & So tai khoan ngan hang, tach biet danh sach KH/NCC rieng tung cong ty.
+- Ho tro Nap moi (thay the) & Update (bo sung/cap nhat) danh sach KH/NCC + dong bo Cloud (GitHub/Firebase).
 """
 import base64
 import csv
@@ -126,10 +121,8 @@ def _build_initial_db():
     return {"companies": companies}
 
 _LOCAL_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "partners_db.json")
-_ACC_TO_COMPANY_CODE = {acc.strip(): code for _, code, _, acc in _DEFAULT_ACCOUNTS}
 
 def load_shared_db():
-    """Doc danh ba tu Cloud (Firebase / GitHub) hoac file cuc bo, gop voi danh sach 16 cong ty mac dinh"""
     db = _build_initial_db()
     remote_data = None
 
@@ -170,16 +163,15 @@ def load_shared_db():
     if remote_data and isinstance(remote_data.get("companies"), dict):
         for code, cdata in remote_data["companies"].items():
             if code in db["companies"]:
-                if cdata.get("customers"): db["companies"][code]["customers"] = cdata["customers"]
-                if cdata.get("suppliers"): db["companies"][code]["suppliers"] = cdata["suppliers"]
-                if cdata.get("accounts"): db["companies"][code]["accounts"] = cdata["accounts"]
+                if "customers" in cdata: db["companies"][code]["customers"] = cdata["customers"]
+                if "suppliers" in cdata: db["companies"][code]["suppliers"] = cdata["suppliers"]
+                if "accounts" in cdata: db["companies"][code]["accounts"] = cdata["accounts"]
                 if cdata.get("name"): db["companies"][code]["name"] = cdata["name"]
             else:
                 db["companies"][code] = cdata
     return db
 
 def save_shared_db(db):
-    """Luu danh ba ra file cuc bo + dong bo len Cloud (Firebase / GitHub) de may khac dung chung"""
     try:
         with open(_LOCAL_DB_FILE, "w", encoding="utf-8") as f:
             json.dump(db, f, ensure_ascii=False, indent=2)
@@ -198,7 +190,7 @@ def save_shared_db(db):
                 headers={"Content-Type": "application/json"}
             )
             urllib.request.urlopen(req, timeout=6)
-            return True, "Đã lưu đồng bộ lên Firebase Cloud (mọi máy đều dùng chung)"
+            return True, "Đã đồng bộ lên Firebase Cloud (mọi máy đều thấy)"
         except Exception as e:
             return False, f"Lỗi lưu Firebase: {e}"
 
@@ -231,11 +223,11 @@ def save_shared_db(db):
                 }
             )
             urllib.request.urlopen(req_put, timeout=8)
-            return True, "Đã lưu đồng bộ lên GitHub (mọi máy đều dùng chung)"
+            return True, "Đã đồng bộ lên GitHub (mọi máy đều thấy)"
         except Exception as e:
             return False, f"Lỗi lưu GitHub: {e}"
 
-    return True, "Đã lưu trên máy chủ Web (lưu ý: nếu Render ngủ sẽ reset về danh sách gốc trừ khi gắn GITHUB_TOKEN / FIREBASE_DB_URL)"
+    return True, "Đã lưu trên máy chủ Web (thêm GITHUB_TOKEN vào Render để đồng bộ vĩnh viễn)"
 
 
 # =========================================================================
@@ -1042,53 +1034,8 @@ def extract_excel_or_csv(path):
 
 
 # =========================================================================
-#  4. BO NHAN DIEN TAI KHOAN DOI UNG & GHEP MA DOI TUONG CHO ASP
+#  4. BO NHAN DIEN TAI KHOAN DOI UNG & GHEP MA DOI TUONG (TACH BIET TUNG CONG TY)
 # =========================================================================
-_PARTNER_ALIASES = [
-    ("loc hoang", "lochoang"), ("lan hien", "lanhien"), ("thinh hien", "thinhhien"),
-    ("thuy khanh", "thuykhanh"), ("thanh anh", "thanhanh"), ("minh huy", "minhhuy"),
-    ("le trung", "letrung"), ("hung long", "hunglong"), ("thanh phat", "thanhphat"),
-    ("khoi huong", "khoihuong"), ("phuc thanh", "phucthanh"), ("hoang anh", "hoanganh"),
-    ("ha ken", "haken"), ("hoang nguyen", "hoangnguyen"),
-    ("cpcknn ly nhan", "cokhi"), ("co khi nn ly nhan", "cokhi"), ("co khi nong nghiep ly nhan", "cokhi"),
-    ("duc long ha anh", "duclonghaanh"), ("minh quang", "minhquang"),
-    ("hoa lu", "hoalu"), ("hung phat", "hungphat"), ("thang loan", "thangloan"),
-    ("thai hung", "thaihung"), ("trung kien", "trungkien"), ("viet nhat", "vietnhat"),
-    ("viet xo", "vietxo"), ("toan hung", "toanhung"), ("hau phat", "hauphat"),
-    ("thanh dat", "thanhdat"), ("ngoi sao viet", "ngoisaoviet"), ("thep nam a", "thepnama"),
-    ("bim son", "bimson"), ("duc duy", "ducduy"), ("thanh nam", "thanhnam"),
-    ("quang na", "quangna"), ("tan hong ha", "tanhongha"), ("xuan hung", "xuanhung"),
-    ("sang phuong", "sangphuong"), ("hoa sen home", "hoasenhome"), ("hoa binh", "hoabinh"),
-    ("anh kien", "anhkien"), ("ba ky", "baky"), ("duc linh", "duclinh"),
-    ("viet y", "viety"), ("huihuang", "huihuang"), ("thien son", "thienson"),
-    ("nam duy", "namduy"), ("dong a", "donga"), ("ha anh", "haanh"),
-    ("hancom", "hancom"), ("vuong thin", "vuongthin"), ("an phu", "anphu"),
-    ("thinh cuong", "thinhcuong"), ("thanh bac", "thanhbac"), ("tue hoa", "tuehoa"),
-    ("hung hien", "hunghien"), ("xd 226", "xd226"), ("226 ha nam", "xd226"),
-    ("doan tue", "doantue"), ("minh nhat", "minhnhat"), ("3f viet", "3fviet"),
-    ("vina agri", "dhvinaagri"), ("mavin", "mavin"), ("sunjin", "sunjin"),
-    ("mind group", "mindgroup"), ("tap doan 68", "tapdoan68"), ("manh dat", "manhdat"),
-    ("ly ha thanh", "lyhathanh"), ("phu thanh an", "phuthanhan"),
-    ("hong ha", "hongha"), ("long truong giang", "longtruonggiang"), ("bao khang", "baokhang"),
-    ("tan sang", "tansang"), ("hung thinh", "hungthinh"), ("quan anh", "quananh"),
-    ("hoang long", "hoanglong"), ("maresti", "maresti"), ("tacovi", "tacovi"),
-    ("phuong trang", "phuongtrang"), ("trung tuyet", "trungtuyet"), ("bui minh", "buiminh"),
-    ("mai linh", "mailinh"), ("eco home", "ecohome"), ("hung hai", "hunghai"),
-    ("thai son", "thaison"), ("quang huong", "quanghuong"), ("kim thanh", "kimthanh"),
-    ("viet phap", "vietphap"), ("nam phat", "namphat"), ("pharaon", "pharaon"),
-    ("hoa phat", "hoaphat"), ("sinotruk", "sinotruknhuy"), ("gia bao chau", "giabaochau"),
-    ("khanh hung", "khanhhung"), ("hai long", "hailong"), ("huyen linh", "huyenlinh"),
-    ("huyen anh", "huyenanh"), ("an binh", "anbinh"), ("ben vung ly nhan", "benvunglynhan"),
-    ("minh khoa", "minhkhoa"), ("ngoc bien", "ngocbien"), ("y thuy", "ythuy"),
-    ("thang hang", "thanghang"), ("nam thanh", "namthanh"),
-    ("kyoto", "kyoto"), ("haka", "haka"), ("phuc chau", "phucchau"),
-    ("kiotviet", "kiotviet"), ("tung ngoc", "tungngoc"), ("motell", "motell"),
-    ("hoa phat auto", "hoaphatauto"), ("dien luc ly nhan", "dienluclynhan"),
-    ("trung tam dang kiem", "ttdangkiem"), ("phat trien quy dat", "ptquydat"),
-    ("khang duy", "khangduy"), ("toan gia phat", "toangiaphat"), ("thien hoa an", "thienhoaan"),
-    ("atc", "atc"), ("mega", "mega")
-]
-
 _STOP_WORDS_NAME = {
     "cong", "ty", "cty", "tnhh", "cp", "co", "phan", "mtv", "tm", "dv", "sx", "xd",
     "tmdv", "tmxd", "dvtm", "xnk", "va", "cn", "chi", "nhanh", "hcm", "hn", "ha", "nam",
@@ -1106,7 +1053,7 @@ _LEGAL_PREFIX_WORDS = {
     "cong", "ty", "cty", "tnhh", "cp", "co", "phan", "mtv", "ho", "kinh", "doanh", "hkd",
     "trach", "nhiem", "huu", "han", "tu", "van", "dau", "tu", "xay", "dung", "thuong", "mai",
     "dich", "vu", "san", "xuat", "van", "tai", "tm", "dv", "sx", "xd", "va", "dt", "dvtm",
-    "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc"
+    "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc", "dtxd", "tvxd", "xdtm", "sxkd"
 }
 
 _DEFAULT_INTERNAL_PEOPLE = {"nguyen van lan"}
@@ -1125,10 +1072,6 @@ def _owner_code_candidates(owner_name, owner_code=""):
         cands.add("".join(tokens))
         cands.add(" ".join(tokens[-2:]))
         cands.add("".join(tokens[-2:]))
-    for alias_k, alias_v in _PARTNER_ALIASES:
-        if alias_k in clean:
-            cands.add(alias_k)
-            cands.add(alias_v)
     return cands
 
 def _normalize_partner_search_variants(name):
@@ -1187,67 +1130,6 @@ def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands)
 
     return best_code
 
-def _extract_partner_code(mota, doitac, owner_name, owner_code="", owner_acc="",
-                          preferred_list=None, secondary_list=None):
-    owner_cands = _owner_code_candidates(owner_name, owner_code=owner_code)
-    raw_combined = f"{mota} {doitac}"
-    norm_combined = re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())
-    norm_combined = re.sub(r'\s+', ' ', norm_combined).strip()
-
-    # 1. UU TIEN CAO NHAT: Tim trong Danh sach KH / NCC da luu cua cong ty
-    if preferred_list:
-        matched = _match_from_directory(norm_combined, raw_combined, preferred_list, owner_cands)
-        if matched:
-            return matched
-    if secondary_list:
-        matched = _match_from_directory(norm_combined, raw_combined, secondary_list, owner_cands)
-        if matched:
-            return matched
-
-    # 2. Kiem tra so tai khoan doi ung thuoc danh sach 16 cong ty TaiKhoanNH
-    for acc_no, comp_code in _ACC_TO_COMPANY_CODE.items():
-        if len(acc_no) >= 7 and acc_no != owner_acc and comp_code not in owner_cands:
-            if acc_no in raw_combined:
-                return comp_code
-
-    # 3. Tim trong cot DoiTac (VietinBank / LPBank / MBBank)
-    doitac_clean = strip_accents(doitac or "").lower()
-    if doitac_clean and "tien mat" not in doitac_clean and "tai don vi" not in doitac_clean:
-        dt_main = re.split(r'\s*[–\-]\s*a/c:|a/c:', doitac_clean)[0].strip()
-        for kw, code in _PARTNER_ALIASES:
-            if kw in dt_main and kw not in owner_cands and code not in owner_cands:
-                return code
-        dt_words = [w for w in re.sub(r'[^a-z0-9\s]', ' ', dt_main).split()
-                    if w not in _STOP_WORDS_NAME and not w.isdigit()]
-        if dt_words:
-            cand_code = "".join(dt_words[:4])
-            if cand_code not in owner_cands and len(cand_code) >= 3:
-                return cand_code
-
-    # 4. Tim theo tu dien mac dinh trong noi dung MoTa
-    desc_clean = strip_accents(mota or "").lower()
-    desc_clean = re.sub(r'[_\-;,/]+', ' ', desc_clean)
-    desc_masked = desc_clean
-    for oc in sorted(owner_cands, key=len, reverse=True):
-        if len(oc) >= 4:
-            desc_masked = desc_masked.replace(oc, " ")
-
-    for kw, code in _PARTNER_ALIASES:
-        if kw in desc_masked and kw not in owner_cands and code not in owner_cands:
-            return code
-
-    # 5. Tu tach ten cong ty sau "cty" / "cong ty"
-    m_cty = re.search(r'(?:cong ty|cty)\s+(?:tnhh|cp|co phan|tm|dv|sx|xd|tmdv|xnk|\s)*([a-z0-9\s]{3,35})', desc_masked)
-    if m_cty:
-        words = [w for w in m_cty.group(1).split() if w not in _STOP_WORDS_NAME and not re.match(r'^\d{4,}$', w)]
-        if words:
-            code = "".join(words[:3])
-            if code not in owner_cands and len(code) >= 3:
-                return code
-
-    return ""
-
-
 def _resolve_bank_partner_code(bank_key, source_file=""):
     known = {"acb", "agribank", "bidv", "vietinbank", "lpbank", "mbbank", "vpbank", "sacombank"}
     bk = str(bank_key or "").strip().lower()
@@ -1261,7 +1143,7 @@ def _resolve_bank_partner_code(bank_key, source_file=""):
 
 
 def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
-                     customers=None, suppliers=None, bank_code=""):
+                     customers=None, suppliers=None, bank_code="", acc_to_comp=None):
     no_val = to_num(row.get('No'))
     co_val = to_num(row.get('Co'))
     mota = row.get('MoTa', '')
@@ -1273,7 +1155,6 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
     combined = f"{txt} {dt_txt}"
 
     # 0. CAC KHOAN VAY / THUE / BHXH / NOI BO / LUONG -> DE TRONG ""
-    # Chay TRUOC bo loc phi 6422 de "Thu goc: ... Thu lai: ... Thu phi: VND" khong bi bat nham vao 6422!
     other_non_keywords = (
         "thu goc", "thu lai", "thu lai phat", "khe uoc", "tra von vay", "tra lai vay",
         "loan repayment", "thau chi", "dong goc lai", "giai ngan",
@@ -1284,7 +1165,7 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
     if any(k in combined for k in other_non_keywords):
         return "", ""
 
-    # 1. LAI TIEN GUI (TK 515) -> MaDT = ten ngan hang (acb, agribank, bidv...)
+    # 1. LAI TIEN GUI (TK 515) -> MaDT = ten ngan hang
     if co_val > 0 and no_val == 0:
         if (magd == "IIPD" or any(k in combined for k in (
             "lai nhap von", "but toan tra lai", "tra lai tai khoan", "tra lai tien gui",
@@ -1329,12 +1210,19 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
     if is_cash_or_cheque:
         return "1111", ""
 
-    # 4. KHACH TRA TIEN (TK 131) -> CO > 0
+    owner_cands = _owner_code_candidates(owner_name, owner_code=owner_code)
+    raw_combined = f"{mota} {doitac}"
+    norm_combined = re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())
+    norm_combined = re.sub(r'\s+', ' ', norm_combined).strip()
+
+    # 4. KHACH TRA TIEN (TK 131) -> CHI DUNG DANH SACH KHACH HANG CUA CONG TY DO
     if co_val > 0 and no_val == 0:
-        ma_dt = _extract_partner_code(
-            mota, doitac, owner_name, owner_code=owner_code, owner_acc=owner_acc,
-            preferred_list=customers, secondary_list=suppliers
-        )
+        ma_dt = _match_from_directory(norm_combined, raw_combined, customers or [], owner_cands) or ""
+        if not ma_dt and acc_to_comp:
+            for acc_no, comp_code in acc_to_comp.items():
+                if len(acc_no) >= 7 and acc_no != owner_acc and comp_code not in owner_cands and acc_no in raw_combined:
+                    ma_dt = comp_code
+                    break
         is_customer_pay = (
             bool(ma_dt)
             or bool(dt_txt and "tien mat" not in dt_txt)
@@ -1348,12 +1236,14 @@ def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
         if is_customer_pay:
             return "131", ma_dt
 
-    # 5. TRA TIEN NHA CUNG CAP (TK 331) -> NO > 0
+    # 5. TRA TIEN NHA CUNG CAP (TK 331) -> CHI DUNG DANH SACH NHA CUNG CAP CUA CONG TY DO
     if no_val > 0 and co_val == 0:
-        ma_dt = _extract_partner_code(
-            mota, doitac, owner_name, owner_code=owner_code, owner_acc=owner_acc,
-            preferred_list=suppliers, secondary_list=customers
-        )
+        ma_dt = _match_from_directory(norm_combined, raw_combined, suppliers or [], owner_cands) or ""
+        if not ma_dt and acc_to_comp:
+            for acc_no, comp_code in acc_to_comp.items():
+                if len(acc_no) >= 7 and acc_no != owner_acc and comp_code not in owner_cands and acc_no in raw_combined:
+                    ma_dt = comp_code
+                    break
         is_supplier_pay = (
             bool(ma_dt)
             or bool(dt_txt and "tien mat" not in dt_txt)
@@ -1528,7 +1418,7 @@ def create_workbook_from_sheets(sheets_data, mode="4col"):
 
 
 # =========================================================================
-#  6. GIAO DIEN WEB PASTEL + DANH BA CHUNG TREN WEB + NUT NOI 3D
+#  6. GIAO DIEN WEB PASTEL + THEM CONG TY/TK NH + UPDATE & XEM DANH SACH
 # =========================================================================
 HTML_UI = r"""<!DOCTYPE html>
 <html lang="vi">
@@ -1573,7 +1463,7 @@ HTML_UI = r"""<!DOCTYPE html>
             gap: 10px;
             margin-bottom: 12px;
         }
-        .partner-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .partner-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
         select {
             padding: 9px 12px;
             border: 1.5px solid #d5ddf0;
@@ -1581,697 +1471,29 @@ HTML_UI = r"""<!DOCTYPE html>
             font-size: 13.5px;
             background: #fff;
             color: #3d485c;
-            min-width: 310px;
+            min-width: 320px;
             max-width: 100%;
         }
+        .acc-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+        .acc-chip {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #eef3ff; border: 1px solid #cfe0fc; color: #3c5791;
+            padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
+        }
+        .acc-del { cursor: pointer; color: #c94c5b; font-weight: bold; border: none; background: transparent; font-size: 14px; padding: 0 2px; }
         .badge-count {
-            display: inline-block;
-            padding: 5px 11px;
-            border-radius: 8px;
-            font-size: 12.5px;
-            font-weight: 600;
-            background: #e8f8f0;
-            color: #1f704b;
-            border: 1px solid #bfead3;
+            display: inline-block; padding: 5px 11px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+            background: #e8f8f0; color: #1f704b; border: 1px solid #bfead3;
         }
         .badge-empty { background: #f5f6fa; color: #7c879c; border-color: #e0e4ee; }
-        .sync-note { font-size: 12px; color: #6c7a93; margin-top: 8px; }
+        .partner-group {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+            background: #fff; padding: 8px 12px; border-radius: 12px; border: 1px solid #e6ebf5;
+        }
 
         .upload-zone {
-            border: 2.5px dashed #9cb8f3;
-            background: #f4f8ff;
-            padding: 28px 20px;
-            text-align: center;
-            border-radius: 16px;
-            cursor: pointer;
-            margin-bottom: 18px;
-            transition: all 0.2s ease;
+            border: 2.5px dashed #9cb8f3; background: #f4f8ff; padding: 28px 20px;
+            text-align: center; border-radius: 16px; cursor: pointer; margin-bottom: 18px; transition: all 0.2s ease;
         }
         .upload-zone:hover { background: #e9f1ff; border-color: #779be8; transform: translateY(-1px); }
-        .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-        input[type="password"], input[type="text"] {
-            padding: 10px 14px;
-            border: 1.5px solid #d9e2f2;
-            border-radius: 10px;
-            font-size: 13.5px;
-            background: #fbfcff;
-            color: #3d485c;
-            outline: none;
-        }
-        input:focus { border-color: #8eb0f2; }
-
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 12px;
-            font-weight: 700;
-            font-size: 13.5px;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.15s ease;
-            transform: translateY(0);
-        }
-        .btn-sm { padding: 8px 14px; font-size: 12.5px; border-radius: 10px; }
-        .btn-primary {
-            background: linear-gradient(180deg, #91b3fa 0%, #769ce9 100%);
-            color: #ffffff;
-            box-shadow: 0 5px 0 #5b7fc9, 0 8px 16px rgba(118, 156, 233, 0.32);
-        }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #5b7fc9, 0 12px 20px rgba(118, 156, 233, 0.38); }
-        .btn-primary:active { transform: translateY(3px); box-shadow: 0 2px 0 #5b7fc9, 0 4px 8px rgba(118, 156, 233, 0.25); }
-
-        .btn-download {
-            background: linear-gradient(180deg, #83ddb8 0%, #63c79e 100%);
-            color: #164f38;
-            box-shadow: 0 5px 0 #48a67f, 0 8px 16px rgba(99, 199, 158, 0.32);
-        }
-        .btn-download:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #48a67f, 0 12px 20px rgba(99, 199, 158, 0.40); }
-        .btn-download:active { transform: translateY(3px); box-shadow: 0 2px 0 #48a67f, 0 4px 8px rgba(99, 199, 158, 0.25); }
-
-        .btn-asp {
-            background: linear-gradient(180deg, #c2aff7 0%, #a58ee8 100%);
-            color: #ffffff;
-            box-shadow: 0 5px 0 #8269c9, 0 8px 16px rgba(165, 142, 232, 0.34);
-        }
-        .btn-asp:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #8269c9, 0 12px 20px rgba(165, 142, 232, 0.42); }
-        .btn-asp:active { transform: translateY(3px); box-shadow: 0 2px 0 #8269c9, 0 4px 8px rgba(165, 142, 232, 0.25); }
-
-        .btn-soft {
-            background: linear-gradient(180deg, #ffffff 0%, #f1f4fb 100%);
-            color: #4b5d7a;
-            border: 1px solid #d9e1f2;
-            box-shadow: 0 3px 0 #d0d8ea;
-        }
-        .btn-soft:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #c3cde3; }
-        .btn-soft:active { transform: translateY(2px); box-shadow: 0 1px 0 #c3cde3; }
-
-        .btn-peach {
-            background: linear-gradient(180deg, #ffd4be 0%, #f8b799 100%);
-            color: #693018;
-            box-shadow: 0 3px 0 #dc9372;
-        }
-        .btn-peach:hover { transform: translateY(-1px); box-shadow: 0 4px 0 #dc9372; }
-        .btn-peach:active { transform: translateY(2px); box-shadow: 0 1px 0 #dc9372; }
-
-        .tab-btn {
-            padding: 9px 16px;
-            border: 1px solid #dce3f0;
-            background: #f5f7fc;
-            color: #4b5d7a;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 600;
-            box-shadow: 0 3px 0 #d5dceb;
-            transition: all 0.15s ease;
-        }
-        .tab-btn:hover { transform: translateY(-1px); background: #ebf0fb; box-shadow: 0 4px 0 #c9d2e6; }
-        .tab-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #c9d2e6; }
-        .tab-btn.active {
-            background: linear-gradient(180deg, #b8a9f5 0%, #9c8be8 100%);
-            color: #ffffff;
-            border-color: #8b78db;
-            box-shadow: 0 3px 0 #7562c7, 0 5px 10px rgba(156, 139, 232, 0.28);
-        }
-
-        .mode-switch {
-            display: inline-flex;
-            gap: 8px;
-            background: #f2f5fc;
-            padding: 6px;
-            border-radius: 12px;
-            border: 1px solid #e1e8f5;
-        }
-        .mode-pill {
-            padding: 7px 14px;
-            border-radius: 8px;
-            border: none;
-            background: transparent;
-            color: #5b6982;
-            font-weight: 600;
-            font-size: 13px;
-            cursor: pointer;
-        }
-        .mode-pill.active {
-            background: #ffffff;
-            color: #4b659e;
-            box-shadow: 0 2px 6px rgba(91, 127, 201, 0.18);
-        }
-
-        #fileList { margin: 10px 0 0 0; font-size: 13px; color: #5b7fc9; font-weight: 600; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
-        th, td { border: 1px solid #e6ebf5; padding: 9px 11px; text-align: left; }
-        th { background: #e4ecfc; color: #364b75; font-weight: 700; position: sticky; top: 0; z-index: 2; }
-        tbody tr:nth-child(even) { background: #fafbfe; }
-        tbody tr:hover { background: #f2f6ff; }
-        .text-right { text-align: right; }
-        .text-center { text-align: center; }
-        .debit { color: #d45b68; font-weight: 600; }
-        .credit { color: #39996d; font-weight: 600; }
-        .ok { background: #e6f9ef; color: #227850; font-weight: 700; padding: 4px 10px; border-radius: 6px; display: inline-block; }
-        .warn { background: #fde9eb; color: #b8424d; font-weight: 700; padding: 4px 10px; border-radius: 6px; display: inline-block; }
-        .loader { display: none; color: #6787cc; font-weight: 700; margin: 14px 0; }
-        .preview-section { margin-top: 26px; border-top: 2px dashed #e8edf7; padding-top: 20px; }
-        .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-        .preview-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-        .scroll-box { max-height: 500px; overflow: auto; border: 1px solid #e1e7f2; border-radius: 12px; }
-        .cell-input {
-            width: 100%; padding: 5px 8px; border: 1px solid #dde4f2; border-radius: 6px;
-            font-size: 12.5px; background: #fcfdff; color: #3d485c;
-        }
-        .cell-input:focus { border-color: #9c8be8; background: #fff; outline: none; }
-        .tk-badge { text-align: center; font-weight: 700; color: #5b48a8; }
-    </style>
-</head>
-<body>
-<div class="container">
-    <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
-    <div class="subtitle">
-        Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • 2 mẫu kết xuất: <b>Mẫu 4 cột</b> và <b>Kết xuất cho ASP</b> (<code>1111</code>, <code>6422</code>, <code>131</code>, <code>331</code>, <code>515</code>).
-    </div>
-
-    <!-- KHU VUC QUAN LY DANH BA CONG TY DUNG CHUNG TREN WEB -->
-    <div class="partner-card">
-        <div class="partner-header">
-            <div style="font-weight: 700; color: #574699; font-size: 15px;">
-                🏢 Danh bạ Công ty, Khách hàng &amp; Nhà cung cấp (Tự động nhận diện theo Số TK sao kê)
-            </div>
-            <div id="syncBadge" style="font-size: 12px; color: #1f704b; font-weight: 600;"></div>
-        </div>
-
-        <div class="partner-row" style="margin-bottom: 12px;">
-            <label style="font-weight: 600; font-size: 13px;">Xem / Cập nhật công ty:</label>
-            <select id="companySelect" onchange="onSelectCompany()"></select>
-            <button class="btn btn-soft btn-sm" onclick="addCompany()">➕ Thêm công ty</button>
-            <button class="btn btn-peach btn-sm" onclick="deleteCompany()">🗑️ Xóa công ty</button>
-        </div>
-
-        <div class="partner-row">
-            <input type="file" id="upKhFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', this)">
-            <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upKhFile')">📥 Nạp DS Khách hàng (.xlsx)</button>
-            <span id="khStatus" class="badge-count badge-empty">0 Khách hàng</span>
-
-            <input type="file" id="upNccFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('suppliers', this)">
-            <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upNccFile')">📥 Nạp DS Nhà cung cấp (.xlsx)</button>
-            <span id="nccStatus" class="badge-count badge-empty">0 Nhà cung cấp</span>
-        </div>
-        <div class="sync-note" id="syncNoteText">
-            ✨ Hệ thống đã nạp sẵn 16 công ty &amp; 29 số tài khoản ngân hàng. Khi tải sao kê lên, web tự dò theo Số tài khoản để ghép đúng danh sách KH/NCC của công ty đó.
-        </div>
-    </div>
-
-    <div class="upload-zone" onclick="document.getElementById('files').click()">
-        <input type="file" id="files" multiple accept=".pdf,.html,.htm,.xlsx,.xls,.csv" style="display:none" onchange="showFiles()">
-        <div style="font-size: 16px; font-weight: bold; color: #5b7fc9;">📂 Bấm vào đây để chọn 1 hoặc nhiều file sao kê</div>
-        <div id="fileList"></div>
-    </div>
-
-    <div class="controls">
-        <input type="password" id="pwd" style="width: 320px; max-width: 100%;" placeholder="🔑 Mật khẩu file PDF (nếu có)">
-        <button class="btn btn-primary" onclick="uploadAndProcess()">✨ BẮT ĐẦU TRÍCH XUẤT &amp; XEM TRƯỚC</button>
-    </div>
-
-    <div id="loader" class="loader">⏳ Đang trích xuất, đối chiếu số dư và ghép mã đối tượng...</div>
-
-    <div id="resultBox" style="display:none;">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px;">
-            <h3 style="margin: 0; color: #4b659e;">📊 Bảng Đối Chiếu Tổng Quan</h3>
-            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                <button class="btn btn-download" onclick="downloadExcel('4col')">📥 Tải Excel (4 cột)</button>
-                <button class="btn btn-asp" onclick="downloadExcel('asp')">📘 Kết xuất cho ASP (.xlsx)</button>
-            </div>
-        </div>
-
-        <div style="border-radius: 12px; overflow: hidden; border: 1px solid #e6ebf5;">
-            <table>
-                <thead>
-                    <tr>
-                        <th>File nguồn</th><th>Ngân hàng</th><th>Số TK</th>
-                        <th class="text-right">Số GD</th><th class="text-right">Tổng Nợ</th>
-                        <th class="text-right">Tổng Có</th><th>Đối chiếu</th>
-                    </tr>
-                </thead>
-                <tbody id="summaryBody"></tbody>
-            </table>
-        </div>
-
-        <div class="preview-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
-                <h3 style="margin: 0; color: #4b659e;">🔍 Xem Trước &amp; Chỉnh Sửa Trước Khi Tải</h3>
-                <div class="mode-switch">
-                    <button id="btnMode4" class="mode-pill" onclick="switchPreviewMode('4col')">Mẫu 4 cột</button>
-                    <button id="btnModeAsp" class="mode-pill active" onclick="switchPreviewMode('asp')">Kết xuất cho ASP (6 cột)</button>
-                </div>
-            </div>
-
-            <div id="tabs" class="tabs"></div>
-
-            <div class="preview-toolbar">
-                <div id="sheetMeta" style="font-size: 13px; color: #5b6982; font-weight: 500;"></div>
-                <input type="text" id="searchBox" style="width: 300px;" placeholder="🔎 Tìm ngày, số tiền, diễn giải, TK, mã..." oninput="filterPreview()">
-            </div>
-
-            <div class="scroll-box">
-                <table>
-                    <thead id="previewHead"></thead>
-                    <tbody id="previewBody"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-let sharedDB = { companies: {} };
-let selectedCompanyCode = '';
-let allSheetsData = [];
-let activeIdx = 0;
-let previewMode = 'asp';
-
-async function loadSharedDB() {
-    try {
-        const res = await fetch('/api/partners');
-        const data = await res.json();
-        sharedDB = data.db || { companies: {} };
-        if (!selectedCompanyCode && sharedDB.companies['lanhien']) {
-            selectedCompanyCode = 'lanhien';
-        }
-        renderCompanyDropdown();
-    } catch (e) {
-        console.error(e);
-    }
-}
-
-function renderCompanyDropdown() {
-    const sel = document.getElementById('companySelect');
-    sel.innerHTML = '<option value="">-- Tự động nhận diện theo Số tài khoản --</option>';
-    Object.values(sharedDB.companies || {})
-        .sort((a, b) => (a.code || '').localeCompare(b.code || ''))
-        .forEach(c => {
-            let opt = document.createElement('option');
-            opt.value = c.code;
-            opt.text = `[${c.code}] ${c.name}`;
-            sel.appendChild(opt);
-        });
-    sel.value = (selectedCompanyCode && sharedDB.companies[selectedCompanyCode]) ? selectedCompanyCode : '';
-    updateStatusBadges();
-}
-
-function updateStatusBadges() {
-    const comp = sharedDB.companies[selectedCompanyCode];
-    const khEl = document.getElementById('khStatus');
-    const nccEl = document.getElementById('nccStatus');
-    if (!comp) {
-        khEl.innerText = 'Chọn công ty để xem/nạp KH'; khEl.className = 'badge-count badge-empty';
-        nccEl.innerText = 'Chọn công ty để xem/nạp NCC'; nccEl.className = 'badge-count badge-empty';
-        return;
-    }
-    const khCnt = (comp.customers || []).length;
-    const nccCnt = (comp.suppliers || []).length;
-    khEl.innerText = `${khCnt} Khách hàng`;
-    khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
-    nccEl.innerText = `${nccCnt} Nhà cung cấp`;
-    nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
-}
-
-function onSelectCompany() {
-    selectedCompanyCode = document.getElementById('companySelect').value;
-    updateStatusBadges();
-}
-
-async function persistDBToServer() {
-    const res = await fetch('/api/partners/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sharedDB)
-    });
-    const data = await res.json();
-    document.getElementById('syncBadge').innerText = data.message || '✅ Đã lưu';
-}
-
-async function addCompany() {
-    const name = prompt('Nhập Tên công ty mới:');
-    if (!name || !name.trim()) return;
-    const code = prompt('Nhập Mã công ty (viết liền không dấu, VD: abc):');
-    if (!code || !code.trim()) return;
-    const cleanCode = code.trim().toLowerCase();
-    if (!sharedDB.companies[cleanCode]) {
-        sharedDB.companies[cleanCode] = { code: cleanCode, name: name.trim(), accounts: [], customers: [], suppliers: [] };
-    }
-    selectedCompanyCode = cleanCode;
-    renderCompanyDropdown();
-    await persistDBToServer();
-}
-
-async function deleteCompany() {
-    if (!selectedCompanyCode) { alert('Hãy chọn một công ty để xóa!'); return; }
-    if (!confirm(`Bạn có chắc muốn xóa danh bạ của [${selectedCompanyCode}]?`)) return;
-    delete sharedDB.companies[selectedCompanyCode];
-    selectedCompanyCode = '';
-    renderCompanyDropdown();
-    await persistDBToServer();
-}
-
-function triggerPartnerUpload(inputId) {
-    if (!selectedCompanyCode) {
-        alert('Vui lòng chọn Công ty ở ô thả xuống phía trên trước khi nạp danh sách!');
-        return;
-    }
-    document.getElementById(inputId).click();
-}
-
-async function uploadPartnerList(roleKey, inputEl) {
-    if (!inputEl.files.length || !selectedCompanyCode) return;
-    const fd = new FormData();
-    fd.append('file', inputEl.files[0]);
-    try {
-        const res = await fetch('/parse_partners', { method: 'POST', body: fd });
-        const data = await res.json();
-        if (data.error) { alert(data.error); return; }
-        sharedDB.companies[selectedCompanyCode][roleKey] = data.items || [];
-        updateStatusBadges();
-        await persistDBToServer();
-        const label = roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp';
-        alert(`✅ Đã nạp & lưu ${data.items.length} ${label} cho [${selectedCompanyCode}] lên hệ thống Web!`);
-    } catch (e) {
-        alert('Lỗi khi đọc file danh sách: ' + e);
-    } finally {
-        inputEl.value = '';
-    }
-}
-
-function showFiles() {
-    const inp = document.getElementById('files');
-    const names = Array.from(inp.files).map(f => f.name);
-    document.getElementById('fileList').innerText = names.length ? `Đã chọn ${names.length} file: ${names.join(', ')}` : '';
-}
-
-async function uploadAndProcess() {
-    const inp = document.getElementById('files');
-    if (!inp.files.length) { alert('Vui lòng chọn ít nhất 1 file sao kê!'); return; }
-
-    const formData = new FormData();
-    for (let f of inp.files) formData.append('files', f);
-    formData.append('password', document.getElementById('pwd').value);
-    formData.append('fallback_company_code', selectedCompanyCode);
-
-    document.getElementById('loader').style.display = 'block';
-    document.getElementById('resultBox').style.display = 'none';
-
-    try {
-        const res = await fetch('/process', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (data.error) { alert(data.error); return; }
-
-        const tbody = document.getElementById('summaryBody');
-        tbody.innerHTML = '';
-        data.summary.forEach(r => {
-            let tr = document.createElement('tr');
-            let cls = r.status === 'Khớp chuẩn' ? 'ok' : 'warn';
-            tr.innerHTML = `<td>${r.file}</td><td><b>${r.bank}</b></td><td>${r.account}</td>
-                <td class="text-right">${r.count}</td><td class="text-right debit">${r.debit}</td>
-                <td class="text-right credit">${r.credit}</td><td><span class="${cls}">${r.status}</span></td>`;
-            tbody.appendChild(tr);
-        });
-
-        allSheetsData = data.sheets || [];
-        renderTabs();
-        document.getElementById('resultBox').style.display = 'block';
-    } catch (e) {
-        alert('Có lỗi xảy ra: ' + e);
-    } finally {
-        document.getElementById('loader').style.display = 'none';
-    }
-}
-
-function switchPreviewMode(mode) {
-    previewMode = mode;
-    document.getElementById('btnMode4').classList.toggle('active', mode === '4col');
-    document.getElementById('btnModeAsp').classList.toggle('active', mode === 'asp');
-    filterPreview();
-}
-
-function renderTabs() {
-    const tabsEl = document.getElementById('tabs');
-    tabsEl.innerHTML = '';
-    allSheetsData.forEach((s, idx) => {
-        let btn = document.createElement('button');
-        btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
-        btn.innerText = `${s.file} (${s.rows.length})`;
-        btn.onclick = () => selectTab(idx);
-        tabsEl.appendChild(btn);
-    });
-    if (allSheetsData.length > 0) selectTab(0);
-}
-
-function selectTab(idx) {
-    activeIdx = idx;
-    document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
-    document.getElementById('searchBox').value = '';
-    const s = allSheetsData[idx];
-    document.getElementById('sheetMeta').innerHTML =
-        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Công ty: <b>${s.customer || s.company_code || '—'}</b> • Giao dịch: <b>${s.rows.length}</b>`;
-    renderPreviewRows(s.rows);
-}
-
-function filterPreview() {
-    const kw = document.getElementById('searchBox').value.trim().toLowerCase();
-    const rows = allSheetsData[activeIdx]?.rows || [];
-    if (!kw) { renderPreviewRows(rows); return; }
-    const filtered = rows.filter(r =>
-        (r.Ngay || '').toLowerCase().includes(kw) ||
-        (r.MoTa || '').toLowerCase().includes(kw) ||
-        (r.No || '').toLowerCase().includes(kw) ||
-        (r.Co || '').toLowerCase().includes(kw) ||
-        (r.TK || '').toLowerCase().includes(kw) ||
-        (r.MaDT || '').toLowerCase().includes(kw)
-    );
-    renderPreviewRows(filtered);
-}
-
-function updateRowField(rowObjIndex, field, value) {
-    if (allSheetsData[activeIdx] && allSheetsData[activeIdx].rows[rowObjIndex]) {
-        allSheetsData[activeIdx].rows[rowObjIndex][field] = value.trim();
-    }
-}
-
-function renderPreviewRows(rows) {
-    const thead = document.getElementById('previewHead');
-    const tbody = document.getElementById('previewBody');
-    tbody.innerHTML = '';
-
-    if (previewMode === 'asp') {
-        thead.innerHTML = `<tr>
-            <th class="text-center" style="width: 105px;">Ngày</th>
-            <th class="text-right" style="width: 130px;">Nợ</th>
-            <th class="text-right" style="width: 130px;">Có</th>
-            <th>Diễn giải</th>
-            <th class="text-center" style="width: 120px;">TK đối ứng</th>
-            <th style="width: 155px;">Mã đối tượng</th>
-        </tr>`;
-    } else {
-        thead.innerHTML = `<tr>
-            <th class="text-center" style="width: 115px;">Ngày</th>
-            <th class="text-right" style="width: 145px;">Nợ</th>
-            <th class="text-right" style="width: 145px;">Có</th>
-            <th>Diễn giải</th>
-        </tr>`;
-    }
-
-    const colCount = previewMode === 'asp' ? 6 : 4;
-    if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="${colCount}" class="text-center" style="color:#888;padding:24px;">Không có dữ liệu giao dịch phù hợp</td></tr>`;
-        return;
-    }
-
-    const sourceRows = allSheetsData[activeIdx].rows;
-    rows.forEach(r => {
-        const origIdx = sourceRows.indexOf(r);
-        let tr = document.createElement('tr');
-        let noDisp = (r.No && r.No !== '0') ? r.No : '';
-        let coDisp = (r.Co && r.Co !== '0') ? r.Co : '';
-
-        if (previewMode === 'asp') {
-            tr.innerHTML = `
-                <td class="text-center"><b>${r.Ngay}</b></td>
-                <td class="text-right debit">${noDisp}</td>
-                <td class="text-right credit">${coDisp}</td>
-                <td>${r.MoTa}</td>
-                <td><input class="cell-input tk-badge" value="${r.TK || ''}" onchange="updateRowField(${origIdx}, 'TK', this.value)" placeholder="Trống"></td>
-                <td><input class="cell-input" value="${r.MaDT || ''}" onchange="updateRowField(${origIdx}, 'MaDT', this.value)" placeholder="Trống"></td>
-            `;
-        } else {
-            tr.innerHTML = `
-                <td class="text-center"><b>${r.Ngay}</b></td>
-                <td class="text-right debit">${noDisp}</td>
-                <td class="text-right credit">${coDisp}</td>
-                <td>${r.MoTa}</td>
-            `;
-        }
-        tbody.appendChild(tr);
-    });
-}
-
-async function downloadExcel(mode) {
-    if (!allSheetsData.length) return;
-    try {
-        const res = await fetch('/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: mode, sheets: allSheetsData })
-        });
-        if (!res.ok) { alert('Lỗi khi tạo file Excel'); return; }
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = mode === 'asp' ? 'KetXuat_Cho_ASP.xlsx' : 'SaoKe_4Cot_Chuan.xlsx';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-    } catch (e) {
-        alert('Lỗi tải file: ' + e);
-    }
-}
-
-loadSharedDB();
-</script>
-</body>
-</html>"""
-
-
-@app.route("/")
-def index():
-    return render_template_string(HTML_UI)
-
-
-@app.route("/api/partners", methods=["GET"])
-def api_get_partners():
-    return jsonify({"db": load_shared_db()})
-
-
-@app.route("/api/partners/save", methods=["POST"])
-def api_save_partners():
-    payload = request.get_json(silent=True) or {}
-    ok, msg = save_shared_db(payload)
-    return jsonify({"ok": ok, "message": msg})
-
-
-@app.route("/parse_partners", methods=["POST"])
-def parse_partners_route():
-    f = request.files.get("file")
-    if not f:
-        return jsonify({"error": "Không có file danh sách được tải lên"}), 400
-    try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            p = os.path.join(tmp_dir, os.path.basename(f.filename))
-            f.save(p)
-            items = parse_partner_excel(p)
-        return jsonify({"items": items})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-
-@app.route("/process", methods=["POST"])
-def process_files():
-    uploaded = request.files.getlist("files")
-    pwd = request.form.get("password", "").strip() or None
-    fallback_comp_code = request.form.get("fallback_company_code", "").strip()
-    shared_db = load_shared_db()
-    companies_map = shared_db.get("companies", {})
-
-    if not uploaded:
-        return jsonify({"error": "Không có file nào được tải lên"}), 400
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        paths = []
-        for f in uploaded:
-            p = os.path.join(tmp_dir, os.path.basename(f.filename))
-            f.save(p)
-            paths.append(p)
-
-        summary, sheets = [], []
-        for p in paths:
-            res = extract_any(p, password=pwd)
-            warns = [] if res.get('loi') else validate(res)
-            hi = res.get('header_info', {})
-            acc_no = str(hi.get('account_no', '') or '').strip()
-
-            # Tu dong nhan dien Ma CT theo So tai khoan trong TaiKhoanNH
-            comp_code = _ACC_TO_COMPANY_CODE.get(acc_no, "") or fallback_comp_code
-            comp_obj = companies_map.get(comp_code, {})
-            owner_name = hi.get('customer') or hi.get('account_name') or comp_obj.get('name', '')
-            customers = comp_obj.get("customers", [])
-            suppliers = comp_obj.get("suppliers", [])
-            bank_code = _resolve_bank_partner_code(res.get('bank'), res.get('source_file', ''))
-
-            t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
-            t_cred = to_num(res['total_credit']) if res.get('total_credit') else sum(to_num(x['Co']) for x in res['rows'])
-
-            if res.get('loi'): status = "❌ LỖI: " + res['loi']
-            elif warns: status = "⚠️ CẢNH BÁO: " + " | ".join(warns[:2])
-            else: status = "Khớp chuẩn"
-
-            summary.append({
-                "file": res['source_file'],
-                "bank": str(res['bank']).upper(),
-                "account": acc_no,
-                "count": len(res['rows']),
-                "debit": f"{t_deb:,.0f}",
-                "credit": f"{t_cred:,.0f}",
-                "status": status
-            })
-
-            preview_rows = []
-            for r in res['rows']:
-                no_v = to_num(r['No'])
-                co_v = to_num(r['Co'])
-                tk_doi_ung, ma_dt = classify_for_asp(
-                    r, owner_name=owner_name, owner_code=comp_code, owner_acc=acc_no,
-                    customers=customers, suppliers=suppliers, bank_code=bank_code
-                )
-                preview_rows.append({
-                    "Ngay": r['Ngay'],
-                    "No": f"{no_v:,.0f}" if no_v != 0 else "0",
-                    "Co": f"{co_v:,.0f}" if co_v != 0 else "0",
-                    "MoTa": r['MoTa'],
-                    "TK": tk_doi_ung,
-                    "MaDT": ma_dt
-                })
-
-            sheets.append({
-                "file": res['source_file'],
-                "bank": str(res['bank']).upper(),
-                "account": acc_no,
-                "customer": owner_name,
-                "company_code": comp_code,
-                "error": res.get('loi'),
-                "rows": preview_rows
-            })
-
-    return jsonify({"summary": summary, "sheets": sheets})
-
-
-@app.route("/export", methods=["POST"])
-def export_excel_route():
-    payload = request.get_json(silent=True) or {}
-    mode = payload.get("mode", "4col")
-    sheets = payload.get("sheets", [])
-    xlsx_bytes = create_workbook_from_sheets(sheets, mode=mode)
-    fname = "KetXuat_Cho_ASP.xlsx" if mode == "asp" else "SaoKe_4Cot_Chuan.xlsx"
-    return send_file(
-        io.BytesIO(xlsx_bytes),
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=fname
-    )
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    if not os.environ.get("RENDER") and not os.environ.get("PYTHONANYWHERE_DOMAIN"):
-        Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    app.run(host="0.0.0.0", port=port)
+        .controls { display: flex; g
