@@ -4,15 +4,16 @@ CONG CU TRICH XUAT SAO KE NGAN HANG
 - PDF: VietinBank, BIDV, LPBank (7 cot & 10 cot), ACB, MBBank
 - HTML: VPBank (T24 Core)
 - Excel/CSV: Sacombank, Agribank IPCAS, Excel khac
-- Dinh dang ngay chuan: dd/mm/yyyy
+- Dinh dang ngay: dd/mm/yyyy
 - Ket xuat 4 cot & Ket xuat cho ASP:
-  + 515: Lai tien gui (MaDT trong)
-  + 6422: Phi ngan hang / chuyen tien (MaDT = ten ngan hang: acb, agribank, bidv, vietinbank, lpbank, mbbank, vpbank, sacombank)
-  + 1111: Nop/Rut tien mat, Rut/Chi sec, Nguoi noi bo chuyen tien (MaDT trong)
-  + 131: Khach tra tien (MaDT theo danh ba KH cua cong ty)
-  + 331: Tra tien NCC (MaDT theo danh ba NCC cua cong ty)
+  + 515: Lai tien gui -> MaDT = ten ngan hang
+  + 6422: Phi ngan hang / chuyen tien -> MaDT = ten ngan hang
+  + 1111: Nop/Rut tien mat, Rut/Chi sec, NGUYEN VAN LAN Chuyen tien -> MaDT trong
+  + 131 / 331: Tu dong nhan dien theo danh ba KH/NCC cua tung cong ty + 16 cong ty trong TaiKhoanNH
   + Thu goc/lai/lai phat/phi vay, Thue, BHXH, Noi bo, Luong... -> De trong
+- Dong bo danh ba dung chung cho moi may tinh qua GitHub (GITHUB_TOKEN + GITHUB_REPO) hoac Firebase (FIREBASE_DB_URL)
 """
+import base64
 import csv
 from html.parser import HTMLParser
 import io
@@ -21,6 +22,7 @@ import os
 import re
 import tempfile
 import unicodedata
+import urllib.request
 import webbrowser
 from threading import Timer
 
@@ -34,6 +36,206 @@ import xlrd
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+
+
+# =========================================================================
+#  0. DU LIEU MAC DINH: 16 CONG TY & 29 TAI KHOAN NGAN HANG + 39 KHACH HANG MAU
+# =========================================================================
+_DEFAULT_ACCOUNTS = [
+    ("CÔNG TY TNHH THƯƠNG MẠI KHÔI HƯƠNG", "khoihuong", "LPBank", "8181222666"),
+    ("CÔNG TY TNHH THƯƠNG MẠI VÀ XÂY DỰNG THỊNH HIỀN", "thinhhien", "LPBank", "5565568868"),
+    ("CÔNG TY TNHH THƯƠNG MẠI VÀ XÂY DỰNG THỊNH HIỀN", "thinhhien", "ACB", "77688866"),
+    ("CÔNG TY TNHH SẢN XUẤT VÀ THƯƠNG MẠI XUẤT NHẬP KHẨU HÙNG LONG", "hunglong", "LPBank", "072710420001"),
+    ("CÔNG TY TNHH THƯƠNG MẠI VÀ SẢN XUẤT MINH HUY HMA", "minhhuy", "LPBank", "8386556789"),
+    ("CÔNG TY TNHH DV THƯƠNG MẠI PHÚC THÀNH", "phucthanh", "Vietcombank", "34643548S01"),
+    ("CÔNG TY TNHH DV THƯƠNG MẠI PHÚC THÀNH", "phucthanh", "MSB", "83988888"),
+    ("CÔNG TY TNHH NANO HOÀNG ANH", "hoanganh", "LPBank", "629899999"),
+    ("CÔNG TY TNHH DỊCH VỤ THƯƠNG MẠI HÀ KỀN", "haken", "Vietcombank", "1066158986"),
+    ("CÔNG TY TNHH XĂNG DẦU THÀNH ANH", "thanhanh", "Vietcombank", "3333206868"),
+    ("CÔNG TY TNHH XĂNG DẦU THÀNH ANH", "thanhanh", "Vietinbank", "116000149017"),
+    ("CÔNG TY TNHH TMDV LỘC HOÀNG", "lochoang", "BIDV", "8600065578"),
+    ("CÔNG TY TRÁCH NHIỆM HỮU HẠN LÂN HIỀN", "lanhien", "BIDV", "4820180367"),
+    ("CÔNG TY TRÁCH NHIỆM HỮU HẠN LÂN HIỀN", "lanhien", "Vietinbank", "111000073812"),
+    ("CÔNG TY TRÁCH NHIỆM HỮU HẠN LÂN HIỀN", "lanhien", "Agribank", "2902201001656"),
+    ("CÔNG TY CỔ PHẦN CƠ KHÍ NÔNG NGHIỆP LÝ NHÂN", "cokhi", "Vietinbank", "116000018872"),
+    ("CÔNG TY TNHH TMDV GẠCH NGÓI THUỶ KHANH", "thuykhanh", "Vietinbank", "118003052315"),
+    ("CÔNG TY TNHH THƯƠNG MẠI & DỊCH VỤ HOÀNG NGUYÊN", "hoangnguyen", "LPBank", "5115123456"),
+    ("CÔNG TY TNHH THƯƠNG MẠI LÊ TRUNG 68", "letrung", "ACB", "98198688"),
+    ("CÔNG TY TNHH THƯƠNG MẠI VÀ VẬN TẢI MINH QUANG", "minhquang", "MB", "1168333999"),
+    ("CÔNG TY TNHH THƯƠNG MẠI VÀ VẬN TẢI MINH QUANG", "minhquang", "Sacombank", "030099253378"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "MB", "2268333999"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "Agribank", "2905201005370"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "NCB", "107909729202"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "LPBank", "077079990001"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "LPBank", "077079990002"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "Sacombank", "030052240022"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "Sacombank", "030052280040"),
+    ("CÔNG TY TNHH MỘT THÀNH VIÊN THÀNH PHÁT LÝ NHÂN", "thanhphat", "Co-op Bank", "3500000040867012"),
+]
+
+_DEFAULT_LANHIEN_CUSTOMERS = [
+    {"code": "0700769778", "name": "CÔNG TY TNHH TƯ VẤN XÂY DỰNG ĐỨC THÀNH", "mst": "0700769778"},
+    {"code": "688", "name": "CÔNG TY TNHH AN DƯƠNG 688", "mst": "0700861847"},
+    {"code": "88 HÀ NAM", "name": "CÔNG TY TNHH ĐẦU TƯ XÂY DỰNG VÀ THƯƠNG MẠI 88 HÀ NAM", "mst": "0700791847"},
+    {"code": "anphu", "name": "CÔNG TY TNHH XÂY DỰNG VÀ TM AN PHÚ", "mst": "0700918003"},
+    {"code": "an phú", "name": "CÔNG TY TNHH ĐẦU TƯ VÀ XÂY DỰNG AN PHÚ", "mst": "0700362301"},
+    {"code": "binhnghia", "name": "UBND xã Bình Nghĩa", "mst": ""},
+    {"code": "CNS", "name": "CÔNG TY TNHH GIẢI PHÁP CÔNG NGHỆ VÀ ĐẦU TƯ XÂY DỰNG CNS", "mst": "0108294154"},
+    {"code": "cuongkhoi", "name": "CÔNG TY TNHH THƯƠNG MẠI CƯỜNG KHÔI", "mst": "0700318528"},
+    {"code": "DABACO", "name": "CÔNG TY TNHH LỢN GIỐNG DABACO HÀ NAM", "mst": "0700757934"},
+    {"code": "DG", "name": "Công Ty TNHH ĐG Trung Kiên", "mst": "0700617302"},
+    {"code": "ducthien", "name": "CÔNG TY TNHH TƯ VẤN VÀ ĐẦU TƯ XÂY DỰNG ĐỨC THIỆN", "mst": "0700614397"},
+    {"code": "gialinh", "name": "CÔNG TY TNHH ĐẦU TƯ XÂY DỰNG GIA LINH", "mst": "0700775080"},
+    {"code": "GIANG PHÚC", "name": "CÔNG TY TNHH XÂY DỰNG VÀ THƯƠNG MẠI GIANG PHÚC", "mst": "0700880494"},
+    {"code": "hainam", "name": "CÔNG TY CỔ PHẦN TƯ VẤN ĐTXD HẢI NAM", "mst": "0600447544"},
+    {"code": "HDT", "name": "Công ty Cổ phần tập đoàn đầu tư xây dựng và phát triển nhà HDT", "mst": "0101585316"},
+    {"code": "hkdnguyenvananh", "name": "HỘ KINH DOANH NGUYỄN VĂN ANH - 1999", "mst": "036099011164"},
+    {"code": "hoangha", "name": "CÔNG TY TNHH ĐẦU TƯ XÂY DỰNG VÀ DVTM HOÀNG HÀ", "mst": "2701003690"},
+    {"code": "hongphu", "name": "Công Ty TNHH Sản Xuất Thương Mại Và Dịch Vụ Hồng Phú", "mst": "0700776292"},
+    {"code": "hungbao", "name": "CÔNG TY TNHH XÂY LẮP HƯNG BẢO", "mst": "0700868698"},
+    {"code": "khanhhung", "name": "CÔNG TY TNHH ĐẦU TƯ XÂY DỰNG VÀ DV TM KHÁNH HƯNG", "mst": "0700690334"},
+    {"code": "KLKimanh", "name": "Bùi Thị Kim Anh", "mst": ""},
+    {"code": "KLTHuy", "name": "Trần Thị Thanh Thủy", "mst": ""},
+    {"code": "lam", "name": "Trần Đình Lâm", "mst": ""},
+    {"code": "Minh Huyến", "name": "Công ty TNHH đầu tư xây dựng Minh Huyến", "mst": "0700523492"},
+    {"code": "minhluat", "name": "Công ty TNHH Minh Luật", "mst": "0700245125"},
+    {"code": "Nguyễn Ngọc Trịnh", "name": "Nguyễn Ngọc Trịnh", "mst": "036080018072"},
+    {"code": "phuchung", "name": "Công ty Cổ phần đầu tư xây dựng Phục Hưng Capital", "mst": "2700822496"},
+    {"code": "phuonghung", "name": "Công Ty CP Đầu Tư Xây Dựng Phượng Hùng", "mst": "0700244146"},
+    {"code": "quynhlong", "name": "CÔNG TY CỔ PHẦN QUỲNH LONG", "mst": "0600741257"},
+    {"code": "THÀNH HUY", "name": "CÔNG TY CP TẬP ĐOÀN THÀNH HUY", "mst": "3000435260"},
+    {"code": "THANH SƠN", "name": "CÔNG TY CỔ PHẦN THƯƠNG MẠI VÀ ĐẦU TƯ THANH SƠN", "mst": "0700432397"},
+    {"code": "tmhanam", "name": "CÔNG TY CP XÂY DỰNG DỊCH VỤ THƯƠNG MẠI HÀ NAM", "mst": "0700217336"},
+    {"code": "truonghunghn", "name": "CÔNG TY TNHH TRƯỜNG HƯNG HN", "mst": "0700898124"},
+    {"code": "tuanthuHN", "name": "CÔNG TY TNHH TUẤN THU HN", "mst": "0700847377"},
+    {"code": "TÙNG ANH", "name": "CÔNG TY TNHH CẤP THOÁT NƯỚC TÙNG ANH", "mst": "0700256021"},
+    {"code": "vuongthin", "name": "CÔNG TY TNHH VƯƠNG THÌN", "mst": "0700921077"},
+    {"code": "XÂY DỰNG 3A", "name": "CÔNG TY TNHH XÂY DỰNG 3A", "mst": "0700805458"},
+    {"code": "xuankhanhHN", "name": "CÔNG TY TNHH XUÂN KHÁNH HÀ NAM", "mst": "0700859446"},
+    {"code": "xuantung", "name": "Xuân Tùng", "mst": ""},
+]
+
+def _build_initial_db():
+    companies = {}
+    for name, code, bank, acc in _DEFAULT_ACCOUNTS:
+        if code not in companies:
+            companies[code] = {"code": code, "name": name, "accounts": [], "customers": [], "suppliers": []}
+        companies[code]["accounts"].append({"bank": bank, "account": acc})
+    if "lanhien" in companies:
+        companies["lanhien"]["customers"] = list(_DEFAULT_LANHIEN_CUSTOMERS)
+    return {"companies": companies}
+
+_LOCAL_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "partners_db.json")
+_ACC_TO_COMPANY_CODE = {acc.strip(): code for _, code, _, acc in _DEFAULT_ACCOUNTS}
+
+def load_shared_db():
+    """Doc danh ba tu Cloud (Firebase / GitHub) hoac file cuc bo, gop voi danh sach 16 cong ty mac dinh"""
+    db = _build_initial_db()
+    remote_data = None
+
+    fb_url = os.environ.get("FIREBASE_DB_URL", "").strip().rstrip("/")
+    gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    gh_repo = os.environ.get("GITHUB_REPO", "").strip()
+
+    if fb_url:
+        try:
+            req = urllib.request.Request(f"{fb_url}/partners_db.json", method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                txt = resp.read().decode("utf-8")
+                if txt and txt != "null":
+                    remote_data = json.loads(txt)
+        except Exception:
+            pass
+    elif gh_token and gh_repo:
+        try:
+            url = f"https://api.github.com/repos/{gh_repo}/contents/partners_db.json"
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {gh_token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "SaoKeApp"
+            })
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                meta = json.loads(resp.read().decode("utf-8"))
+                remote_data = json.loads(base64.b64decode(meta["content"]).decode("utf-8"))
+        except Exception:
+            pass
+
+    if remote_data is None and os.path.exists(_LOCAL_DB_FILE):
+        try:
+            with open(_LOCAL_DB_FILE, "r", encoding="utf-8") as f:
+                remote_data = json.load(f)
+        except Exception:
+            pass
+
+    if remote_data and isinstance(remote_data.get("companies"), dict):
+        for code, cdata in remote_data["companies"].items():
+            if code in db["companies"]:
+                if cdata.get("customers"): db["companies"][code]["customers"] = cdata["customers"]
+                if cdata.get("suppliers"): db["companies"][code]["suppliers"] = cdata["suppliers"]
+                if cdata.get("accounts"): db["companies"][code]["accounts"] = cdata["accounts"]
+                if cdata.get("name"): db["companies"][code]["name"] = cdata["name"]
+            else:
+                db["companies"][code] = cdata
+    return db
+
+def save_shared_db(db):
+    """Luu danh ba ra file cuc bo + dong bo len Cloud (Firebase / GitHub) de may khac dung chung"""
+    try:
+        with open(_LOCAL_DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    fb_url = os.environ.get("FIREBASE_DB_URL", "").strip().rstrip("/")
+    gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    gh_repo = os.environ.get("GITHUB_REPO", "").strip()
+
+    if fb_url:
+        try:
+            body = json.dumps(db, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                f"{fb_url}/partners_db.json", data=body, method="PUT",
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=6)
+            return True, "Đã lưu đồng bộ lên Firebase Cloud (mọi máy đều dùng chung)"
+        except Exception as e:
+            return False, f"Lỗi lưu Firebase: {e}"
+
+    if gh_token and gh_repo:
+        try:
+            url = f"https://api.github.com/repos/{gh_repo}/contents/partners_db.json"
+            sha = None
+            try:
+                req_get = urllib.request.Request(url, headers={
+                    "Authorization": f"Bearer {gh_token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "SaoKeApp"
+                })
+                with urllib.request.urlopen(req_get, timeout=5) as resp:
+                    sha = json.loads(resp.read().decode("utf-8")).get("sha")
+            except Exception:
+                pass
+
+            content_b64 = base64.b64encode(json.dumps(db, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+            payload = {"message": "Cap nhat danh ba KH/NCC tu Web", "content": content_b64}
+            if sha:
+                payload["sha"] = sha
+            req_put = urllib.request.Request(
+                url, data=json.dumps(payload).encode("utf-8"), method="PUT",
+                headers={
+                    "Authorization": f"Bearer {gh_token}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "SaoKeApp"
+                }
+            )
+            urllib.request.urlopen(req_put, timeout=8)
+            return True, "Đã lưu đồng bộ lên GitHub (mọi máy đều dùng chung)"
+        except Exception as e:
+            return False, f"Lỗi lưu GitHub: {e}"
+
+    return True, "Đã lưu trên máy chủ Web (lưu ý: nếu Render ngủ sẽ reset về danh sách gốc trừ khi gắn GITHUB_TOKEN / FIREBASE_DB_URL)"
 
 
 # =========================================================================
@@ -220,14 +422,9 @@ def extract_vietinbank(pdf):
                 ngay_chuan = normalize_date_ddmmyyyy(txt("Ngay") or txt("NgayPhatSinh"))
 
             all_rows.append({
-                'STT': anchor['text'],
-                'Ngay': ngay_chuan,
-                'MoTa': txt("MoTa"),
-                'No': txt("No"),
-                'Co': txt("Co"),
-                'SoDu': txt("SoDu"),
-                'DoiTac': txt("DoiTac"),
-                'MaGD': txt("SoGD"),
+                'STT': anchor['text'], 'Ngay': ngay_chuan, 'MoTa': txt("MoTa"),
+                'No': txt("No"), 'Co': txt("Co"), 'SoDu': txt("SoDu"),
+                'DoiTac': txt("DoiTac"), 'MaGD': txt("SoGD"),
             })
 
     return {
@@ -365,14 +562,8 @@ def extract_lpbank(pdf):
                     doi_tac, ma_gd = "", row[3]
 
                 all_rows.append({
-                    'STT': str(stt_counter),
-                    'Ngay': normalize_date_ddmmyyyy(row[0]),
-                    'MoTa': row[2],
-                    'No': no_val,
-                    'Co': co_val,
-                    'SoDu': sodu_val,
-                    'DoiTac': doi_tac,
-                    'MaGD': ma_gd,
+                    'STT': str(stt_counter), 'Ngay': normalize_date_ddmmyyyy(row[0]), 'MoTa': row[2],
+                    'No': no_val, 'Co': co_val, 'SoDu': sodu_val, 'DoiTac': doi_tac, 'MaGD': ma_gd,
                 })
 
     return {
@@ -557,14 +748,8 @@ def extract_mbbank(pdf):
                 if not row[0] or not row[0].isdigit():
                     continue
                 all_rows.append({
-                    'STT': row[0],
-                    'Ngay': normalize_date_ddmmyyyy(row[1] or row[2]),
-                    'MoTa': row[7],
-                    'No': row[3] or "0",
-                    'Co': row[4] or "0",
-                    'SoDu': row[5],
-                    'DoiTac': row[6],
-                    'MaGD': row[8],
+                    'STT': row[0], 'Ngay': normalize_date_ddmmyyyy(row[1] or row[2]), 'MoTa': row[7],
+                    'No': row[3] or "0", 'Co': row[4] or "0", 'SoDu': row[5], 'DoiTac': row[6], 'MaGD': row[8],
                 })
 
     all_rows.reverse()
@@ -664,8 +849,7 @@ def extract_vpbank_html(parser):
                 'MoTa': get(row, "NARR") or pdesc,
                 'No': (get(row, "PDAMT") or "0").strip().lstrip("-").strip() or "0",
                 'Co': (get(row, "PCAMT") or "0").strip().lstrip("-").strip() or "0",
-                'SoDu': get(row, "BOOKED BALANCE"),
-                'DoiTac': "", 'MaGD': pdesc,
+                'SoDu': get(row, "BOOKED BALANCE"), 'DoiTac': "", 'MaGD': pdesc,
             })
         elif "TOTAL MOVEMENT" in (pdesc or "").upper():
             total_debit = (get(row, "PDAMT") or "").strip().lstrip("-").strip() or None
@@ -749,8 +933,7 @@ def parse_partner_excel(path):
     if header_idx == -1:
         raise ValueError("Không tìm thấy cột 'Mã khách hàng/NCC' và 'Tên khách hàng/NCC' trong file!")
 
-    items = []
-    seen_codes = set()
+    items, seen_codes = [], set()
     for r in rows[header_idx + 1:]:
         if len(r) <= max(code_col, name_col):
             continue
@@ -865,6 +1048,9 @@ _PARTNER_ALIASES = [
     ("loc hoang", "lochoang"), ("lan hien", "lanhien"), ("thinh hien", "thinhhien"),
     ("thuy khanh", "thuykhanh"), ("thanh anh", "thanhanh"), ("minh huy", "minhhuy"),
     ("le trung", "letrung"), ("hung long", "hunglong"), ("thanh phat", "thanhphat"),
+    ("khoi huong", "khoihuong"), ("phuc thanh", "phucthanh"), ("hoang anh", "hoanganh"),
+    ("ha ken", "haken"), ("hoang nguyen", "hoangnguyen"),
+    ("cpcknn ly nhan", "cokhi"), ("co khi nn ly nhan", "cokhi"), ("co khi nong nghiep ly nhan", "cokhi"),
     ("duc long ha anh", "duclonghaanh"), ("minh quang", "minhquang"),
     ("hoa lu", "hoalu"), ("hung phat", "hungphat"), ("thang loan", "thangloan"),
     ("thai hung", "thaihung"), ("trung kien", "trungkien"), ("viet nhat", "vietnhat"),
@@ -882,7 +1068,7 @@ _PARTNER_ALIASES = [
     ("doan tue", "doantue"), ("minh nhat", "minhnhat"), ("3f viet", "3fviet"),
     ("vina agri", "dhvinaagri"), ("mavin", "mavin"), ("sunjin", "sunjin"),
     ("mind group", "mindgroup"), ("tap doan 68", "tapdoan68"), ("manh dat", "manhdat"),
-    ("ly ha thanh", "lyhathanh"), ("phuc thanh", "phucthanh"), ("phu thanh an", "phuthanhan"),
+    ("ly ha thanh", "lyhathanh"), ("phu thanh an", "phuthanhan"),
     ("hong ha", "hongha"), ("long truong giang", "longtruonggiang"), ("bao khang", "baokhang"),
     ("tan sang", "tansang"), ("hung thinh", "hungthinh"), ("quan anh", "quananh"),
     ("hoang long", "hoanglong"), ("maresti", "maresti"), ("tacovi", "tacovi"),
@@ -894,8 +1080,7 @@ _PARTNER_ALIASES = [
     ("khanh hung", "khanhhung"), ("hai long", "hailong"), ("huyen linh", "huyenlinh"),
     ("huyen anh", "huyenanh"), ("an binh", "anbinh"), ("ben vung ly nhan", "benvunglynhan"),
     ("minh khoa", "minhkhoa"), ("ngoc bien", "ngocbien"), ("y thuy", "ythuy"),
-    ("thang hang", "thanghang"), ("cpcknn ly nhan", "cokhilynhan"), ("co khi nn ly nhan", "cokhilynhan"),
-    ("co khi nong nghiep ly nhan", "cokhilynhan"), ("nam thanh", "namthanh"),
+    ("thang hang", "thanghang"), ("nam thanh", "namthanh"),
     ("kyoto", "kyoto"), ("haka", "haka"), ("phuc chau", "phucchau"),
     ("kiotviet", "kiotviet"), ("tung ngoc", "tungngoc"), ("motell", "motell"),
     ("hoa phat auto", "hoaphatauto"), ("dien luc ly nhan", "dienluclynhan"),
@@ -924,16 +1109,17 @@ _LEGAL_PREFIX_WORDS = {
     "tmdv", "tmxd", "xnk", "tap", "doan", "ubnd", "cap", "thoat", "nuoc"
 }
 
-# Danh sach nguoi noi bo mac dinh (neu chuyen tien/nop tien vao TK cong ty -> 1111)
 _DEFAULT_INTERNAL_PEOPLE = {"nguyen van lan"}
 
-def _owner_code_candidates(owner_name):
+def _owner_code_candidates(owner_name, owner_code=""):
+    cands = set()
+    if owner_code:
+        cands.add(owner_code.lower())
     if not owner_name:
-        return set()
+        return cands
     clean = strip_accents(owner_name).lower()
     clean = re.sub(r'[^a-z0-9\s]', ' ', clean)
     tokens = [w for w in clean.split() if w and w not in _STOP_WORDS_NAME and len(w) >= 2]
-    cands = set()
     if len(tokens) >= 2:
         cands.add(" ".join(tokens))
         cands.add("".join(tokens))
@@ -1001,12 +1187,14 @@ def _match_from_directory(search_text_norm, raw_text, partner_list, owner_cands)
 
     return best_code
 
-def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, secondary_list=None):
-    owner_cands = _owner_code_candidates(owner_name)
+def _extract_partner_code(mota, doitac, owner_name, owner_code="", owner_acc="",
+                          preferred_list=None, secondary_list=None):
+    owner_cands = _owner_code_candidates(owner_name, owner_code=owner_code)
     raw_combined = f"{mota} {doitac}"
     norm_combined = re.sub(r'[^a-z0-9\s]', ' ', strip_accents(raw_combined).lower())
     norm_combined = re.sub(r'\s+', ' ', norm_combined).strip()
 
+    # 1. UU TIEN CAO NHAT: Tim trong Danh sach KH / NCC da luu cua cong ty
     if preferred_list:
         matched = _match_from_directory(norm_combined, raw_combined, preferred_list, owner_cands)
         if matched:
@@ -1016,6 +1204,13 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
         if matched:
             return matched
 
+    # 2. Kiem tra so tai khoan doi ung thuoc danh sach 16 cong ty TaiKhoanNH
+    for acc_no, comp_code in _ACC_TO_COMPANY_CODE.items():
+        if len(acc_no) >= 7 and acc_no != owner_acc and comp_code not in owner_cands:
+            if acc_no in raw_combined:
+                return comp_code
+
+    # 3. Tim trong cot DoiTac (VietinBank / LPBank / MBBank)
     doitac_clean = strip_accents(doitac or "").lower()
     if doitac_clean and "tien mat" not in doitac_clean and "tai don vi" not in doitac_clean:
         dt_main = re.split(r'\s*[–\-]\s*a/c:|a/c:', doitac_clean)[0].strip()
@@ -1029,6 +1224,7 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
             if cand_code not in owner_cands and len(cand_code) >= 3:
                 return cand_code
 
+    # 4. Tim theo tu dien mac dinh trong noi dung MoTa
     desc_clean = strip_accents(mota or "").lower()
     desc_clean = re.sub(r'[_\-;,/]+', ' ', desc_clean)
     desc_masked = desc_clean
@@ -1040,6 +1236,7 @@ def _extract_partner_code(mota, doitac, owner_name, preferred_list=None, seconda
         if kw in desc_masked and kw not in owner_cands and code not in owner_cands:
             return code
 
+    # 5. Tu tach ten cong ty sau "cty" / "cong ty"
     m_cty = re.search(r'(?:cong ty|cty)\s+(?:tnhh|cp|co phan|tm|dv|sx|xd|tmdv|xnk|\s)*([a-z0-9\s]{3,35})', desc_masked)
     if m_cty:
         words = [w for w in m_cty.group(1).split() if w not in _STOP_WORDS_NAME and not re.match(r'^\d{4,}$', w)]
@@ -1063,7 +1260,8 @@ def _resolve_bank_partner_code(bank_key, source_file=""):
     return ""
 
 
-def classify_for_asp(row, owner_name="", customers=None, suppliers=None, bank_code="", internal_people=None):
+def classify_for_asp(row, owner_name="", owner_code="", owner_acc="",
+                     customers=None, suppliers=None, bank_code=""):
     no_val = to_num(row.get('No'))
     co_val = to_num(row.get('Co'))
     mota = row.get('MoTa', '')
@@ -1086,15 +1284,15 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None, bank_co
     if any(k in combined for k in other_non_keywords):
         return "", ""
 
-    # 1. LAI TIEN GUI (TK 515) - MaDT de trong
+    # 1. LAI TIEN GUI (TK 515) -> MaDT = ten ngan hang (acb, agribank, bidv...)
     if co_val > 0 and no_val == 0:
         if (magd == "IIPD" or any(k in combined for k in (
             "lai nhap von", "but toan tra lai", "tra lai tai khoan", "tra lai tien gui",
             "chi lai tk", "lai tien gui", "thanh toan lai thang"
         )) or re.match(r'^tra lai\b', txt.strip())):
-            return "515", ""
+            return "515", bank_code
 
-    # 2. PHI NGAN HANG / PHI CHUYEN TIEN (TK 6422) -> MaDT = ten ngan hang (acb, agribank, bidv...)
+    # 2. PHI NGAN HANG / PHI CHUYEN TIEN (TK 6422) -> MaDT = ten ngan hang
     if no_val > 0 and co_val == 0:
         is_fee = False
         if magd == "DDM" or magd.startswith("CHG"):
@@ -1113,19 +1311,11 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None, bank_co
         if is_fee:
             return "6422", bank_code
 
-    # 3. NOP / RUT TIEN MAT, RUT / CHI SEC, NGUOI NOI BO CHUYEN TIEN (TK 1111) -> MaDT de trong
-    internal_set = set(_DEFAULT_INTERNAL_PEOPLE)
-    if internal_people:
-        for p_name in internal_people:
-            p_clean = re.sub(r'\s+', ' ', strip_accents(p_name).lower()).strip()
-            if len(p_clean) >= 3:
-                internal_set.add(p_clean)
-
+    # 3. NOP / RUT TIEN MAT, RUT / CHI SEC, NGUYEN VAN LAN Chuyen tien (TK 1111) -> MaDT de trong
     is_internal_person = any(
         re.search(r'(?<![a-z0-9])' + re.escape(pname) + r'(?![a-z0-9])', combined)
-        for pname in internal_set
+        for pname in _DEFAULT_INTERNAL_PEOPLE
     )
-
     is_cash_or_cheque = (
         "tien mat, vang tien te tai don vi" in dt_txt
         or is_internal_person
@@ -1141,7 +1331,10 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None, bank_co
 
     # 4. KHACH TRA TIEN (TK 131) -> CO > 0
     if co_val > 0 and no_val == 0:
-        ma_dt = _extract_partner_code(mota, doitac, owner_name, preferred_list=customers, secondary_list=suppliers)
+        ma_dt = _extract_partner_code(
+            mota, doitac, owner_name, owner_code=owner_code, owner_acc=owner_acc,
+            preferred_list=customers, secondary_list=suppliers
+        )
         is_customer_pay = (
             bool(ma_dt)
             or bool(dt_txt and "tien mat" not in dt_txt)
@@ -1157,7 +1350,10 @@ def classify_for_asp(row, owner_name="", customers=None, suppliers=None, bank_co
 
     # 5. TRA TIEN NHA CUNG CAP (TK 331) -> NO > 0
     if no_val > 0 and co_val == 0:
-        ma_dt = _extract_partner_code(mota, doitac, owner_name, preferred_list=suppliers, secondary_list=customers)
+        ma_dt = _extract_partner_code(
+            mota, doitac, owner_name, owner_code=owner_code, owner_acc=owner_acc,
+            preferred_list=suppliers, secondary_list=customers
+        )
         is_supplier_pay = (
             bool(ma_dt)
             or bool(dt_txt and "tien mat" not in dt_txt)
@@ -1332,7 +1528,7 @@ def create_workbook_from_sheets(sheets_data, mode="4col"):
 
 
 # =========================================================================
-#  6. GIAO DIEN WEB PASTEL + DANH BA CONG TY + NUT NOI 3D
+#  6. GIAO DIEN WEB PASTEL + DANH BA CHUNG TREN WEB + NUT NOI 3D
 # =========================================================================
 HTML_UI = r"""<!DOCTYPE html>
 <html lang="vi">
@@ -1385,7 +1581,8 @@ HTML_UI = r"""<!DOCTYPE html>
             font-size: 13.5px;
             background: #fff;
             color: #3d485c;
-            min-width: 240px;
+            min-width: 310px;
+            max-width: 100%;
         }
         .badge-count {
             display: inline-block;
@@ -1398,6 +1595,7 @@ HTML_UI = r"""<!DOCTYPE html>
             border: 1px solid #bfead3;
         }
         .badge-empty { background: #f5f6fa; color: #7c879c; border-color: #e0e4ee; }
+        .sync-note { font-size: 12px; color: #6c7a93; margin-top: 8px; }
 
         .upload-zone {
             border: 2.5px dashed #9cb8f3;
@@ -1551,29 +1749,26 @@ HTML_UI = r"""<!DOCTYPE html>
     <h1>🌸 Công cụ trích xuất sao kê ngân hàng</h1>
     <div class="subtitle">
         Hỗ trợ: <b>VietinBank, BIDV, LPBank, ACB, MBBank (PDF)</b> • <b>VPBank (HTML)</b> • <b>Sacombank, Agribank (Excel/CSV)</b>.<br>
-        Chuẩn ngày: <b>dd/mm/yyyy</b> • 2 mẫu kết xuất: <b>Mẫu 4 cột</b> và <b>Kết xuất cho ASP</b> (tự phân loại <code>1111</code>, <code>6422</code>, <code>131</code>, <code>331</code>, <code>515</code> &amp; <code>Mã đối tượng</code>).
+        Chuẩn ngày: <b>dd/mm/yyyy</b> • 2 mẫu kết xuất: <b>Mẫu 4 cột</b> và <b>Kết xuất cho ASP</b> (<code>1111</code>, <code>6422</code>, <code>131</code>, <code>331</code>, <code>515</code>).
     </div>
 
+    <!-- KHU VUC QUAN LY DANH BA CONG TY DUNG CHUNG TREN WEB -->
     <div class="partner-card">
         <div class="partner-header">
             <div style="font-weight: 700; color: #574699; font-size: 15px;">
-                🏢 Danh bạ Khách hàng / Nhà cung cấp theo từng Công ty (Tự động lưu trên trình duyệt)
+                🏢 Danh bạ Công ty, Khách hàng &amp; Nhà cung cấp (Tự động nhận diện theo Số TK sao kê)
             </div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <button class="btn btn-soft btn-sm" onclick="exportBackup()">💾 Sao lưu danh bạ</button>
-                <button class="btn btn-soft btn-sm" onclick="document.getElementById('importBackupFile').click()">📂 Nhập sao lưu</button>
-                <input type="file" id="importBackupFile" accept=".json" style="display:none" onchange="importBackup(this)">
-            </div>
+            <div id="syncBadge" style="font-size: 12px; color: #1f704b; font-weight: 600;"></div>
         </div>
 
         <div class="partner-row" style="margin-bottom: 12px;">
-            <label style="font-weight: 600; font-size: 13px;">Đang chọn công ty:</label>
+            <label style="font-weight: 600; font-size: 13px;">Xem / Cập nhật công ty:</label>
             <select id="companySelect" onchange="onSelectCompany()"></select>
             <button class="btn btn-soft btn-sm" onclick="addCompany()">➕ Thêm công ty</button>
             <button class="btn btn-peach btn-sm" onclick="deleteCompany()">🗑️ Xóa công ty</button>
         </div>
 
-        <div class="partner-row" style="margin-bottom: 12px;">
+        <div class="partner-row">
             <input type="file" id="upKhFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadPartnerList('customers', this)">
             <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upKhFile')">📥 Nạp DS Khách hàng (.xlsx)</button>
             <span id="khStatus" class="badge-count badge-empty">0 Khách hàng</span>
@@ -1582,10 +1777,8 @@ HTML_UI = r"""<!DOCTYPE html>
             <button class="btn btn-soft btn-sm" onclick="triggerPartnerUpload('upNccFile')">📥 Nạp DS Nhà cung cấp (.xlsx)</button>
             <span id="nccStatus" class="badge-count badge-empty">0 Nhà cung cấp</span>
         </div>
-
-        <div class="partner-row">
-            <label style="font-weight: 600; font-size: 13px;">👤 Người nộp/chuyển nội bộ (tự gán 1111):</label>
-            <input type="text" id="internalPeopleInput" style="flex: 1; min-width: 280px;" placeholder="VD: Nguyễn Văn Lân, Nguyễn Thị Thủy, Trần Văn Trường..." onchange="saveInternalPeople()">
+        <div class="sync-note" id="syncNoteText">
+            ✨ Hệ thống đã nạp sẵn 16 công ty &amp; 29 số tài khoản ngân hàng. Khi tải sao kê lên, web tự dò theo Số tài khoản để ghép đúng danh sách KH/NCC của công ty đó.
         </div>
     </div>
 
@@ -1651,48 +1844,48 @@ HTML_UI = r"""<!DOCTYPE html>
 </div>
 
 <script>
-const STORAGE_KEY = 'saoke_company_directories_v1';
-let db = { activeCompany: '', companies: {} };
+let sharedDB = { companies: {} };
+let selectedCompanyCode = '';
 let allSheetsData = [];
 let activeIdx = 0;
 let previewMode = 'asp';
 
-function loadDB() {
+async function loadSharedDB() {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) db = JSON.parse(raw);
-    } catch (e) {}
-    if (!db.companies) db.companies = {};
-    renderCompanyDropdown();
-}
-
-function saveDB() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-    renderCompanyDropdown();
+        const res = await fetch('/api/partners');
+        const data = await res.json();
+        sharedDB = data.db || { companies: {} };
+        if (!selectedCompanyCode && sharedDB.companies['lanhien']) {
+            selectedCompanyCode = 'lanhien';
+        }
+        renderCompanyDropdown();
+    } catch (e) {
+        console.error(e);
+    }
 }
 
 function renderCompanyDropdown() {
     const sel = document.getElementById('companySelect');
-    sel.innerHTML = '<option value="">-- Dùng từ điển chung (chưa chọn công ty) --</option>';
-    Object.keys(db.companies).sort().forEach(name => {
-        let opt = document.createElement('option');
-        opt.value = name;
-        opt.text = name;
-        sel.appendChild(opt);
-    });
-    sel.value = db.activeCompany && db.companies[db.activeCompany] ? db.activeCompany : '';
+    sel.innerHTML = '<option value="">-- Tự động nhận diện theo Số tài khoản --</option>';
+    Object.values(sharedDB.companies || {})
+        .sort((a, b) => (a.code || '').localeCompare(b.code || ''))
+        .forEach(c => {
+            let opt = document.createElement('option');
+            opt.value = c.code;
+            opt.text = `[${c.code}] ${c.name}`;
+            sel.appendChild(opt);
+        });
+    sel.value = (selectedCompanyCode && sharedDB.companies[selectedCompanyCode]) ? selectedCompanyCode : '';
     updateStatusBadges();
 }
 
 function updateStatusBadges() {
-    const comp = db.companies[db.activeCompany];
+    const comp = sharedDB.companies[selectedCompanyCode];
     const khEl = document.getElementById('khStatus');
     const nccEl = document.getElementById('nccStatus');
-    const intEl = document.getElementById('internalPeopleInput');
     if (!comp) {
-        khEl.innerText = '0 Khách hàng'; khEl.className = 'badge-count badge-empty';
-        nccEl.innerText = '0 Nhà cung cấp'; nccEl.className = 'badge-count badge-empty';
-        intEl.value = '';
+        khEl.innerText = 'Chọn công ty để xem/nạp KH'; khEl.className = 'badge-count badge-empty';
+        nccEl.innerText = 'Chọn công ty để xem/nạp NCC'; nccEl.className = 'badge-count badge-empty';
         return;
     }
     const khCnt = (comp.customers || []).length;
@@ -1701,108 +1894,72 @@ function updateStatusBadges() {
     khEl.className = khCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
     nccEl.innerText = `${nccCnt} Nhà cung cấp`;
     nccEl.className = nccCnt > 0 ? 'badge-count' : 'badge-count badge-empty';
-    intEl.value = (comp.internalPeople || []).join(', ');
 }
 
 function onSelectCompany() {
-    db.activeCompany = document.getElementById('companySelect').value;
-    saveDB();
+    selectedCompanyCode = document.getElementById('companySelect').value;
+    updateStatusBadges();
 }
 
-function saveInternalPeople() {
-    const val = document.getElementById('internalPeopleInput').value;
-    if (!db.activeCompany) {
-        if (!val.trim()) return;
-        const name = prompt('Bạn chưa chọn công ty. Nhập tên Công ty muốn lưu danh sách người nội bộ này:');
-        if (!name || !name.trim()) return;
-        const cleanName = name.trim();
-        if (!db.companies[cleanName]) db.companies[cleanName] = { customers: [], suppliers: [], internalPeople: [] };
-        db.activeCompany = cleanName;
-    }
-    db.companies[db.activeCompany].internalPeople = val.split(',').map(x => x.trim()).filter(Boolean);
-    saveDB();
+async function persistDBToServer() {
+    const res = await fetch('/api/partners/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sharedDB)
+    });
+    const data = await res.json();
+    document.getElementById('syncBadge').innerText = data.message || '✅ Đã lưu';
 }
 
-function addCompany() {
-    const name = prompt('Nhập tên Công ty mới (ví dụ: Công ty TNHH Lân Hiền):');
+async function addCompany() {
+    const name = prompt('Nhập Tên công ty mới:');
     if (!name || !name.trim()) return;
-    const cleanName = name.trim();
-    if (!db.companies[cleanName]) {
-        db.companies[cleanName] = { customers: [], suppliers: [], internalPeople: [] };
+    const code = prompt('Nhập Mã công ty (viết liền không dấu, VD: abc):');
+    if (!code || !code.trim()) return;
+    const cleanCode = code.trim().toLowerCase();
+    if (!sharedDB.companies[cleanCode]) {
+        sharedDB.companies[cleanCode] = { code: cleanCode, name: name.trim(), accounts: [], customers: [], suppliers: [] };
     }
-    db.activeCompany = cleanName;
-    saveDB();
+    selectedCompanyCode = cleanCode;
+    renderCompanyDropdown();
+    await persistDBToServer();
 }
 
-function deleteCompany() {
-    if (!db.activeCompany) { alert('Hãy chọn một công ty để xóa!'); return; }
-    if (!confirm(`Bạn có chắc muốn xóa danh bạ của "${db.activeCompany}"?`)) return;
-    delete db.companies[db.activeCompany];
-    db.activeCompany = '';
-    saveDB();
+async function deleteCompany() {
+    if (!selectedCompanyCode) { alert('Hãy chọn một công ty để xóa!'); return; }
+    if (!confirm(`Bạn có chắc muốn xóa danh bạ của [${selectedCompanyCode}]?`)) return;
+    delete sharedDB.companies[selectedCompanyCode];
+    selectedCompanyCode = '';
+    renderCompanyDropdown();
+    await persistDBToServer();
 }
 
 function triggerPartnerUpload(inputId) {
-    if (!db.activeCompany) {
-        const name = prompt('Bạn chưa chọn công ty. Nhập tên Công ty muốn lưu danh sách này:');
-        if (!name || !name.trim()) return;
-        const cleanName = name.trim();
-        if (!db.companies[cleanName]) db.companies[cleanName] = { customers: [], suppliers: [], internalPeople: [] };
-        db.activeCompany = cleanName;
-        saveDB();
+    if (!selectedCompanyCode) {
+        alert('Vui lòng chọn Công ty ở ô thả xuống phía trên trước khi nạp danh sách!');
+        return;
     }
     document.getElementById(inputId).click();
 }
 
 async function uploadPartnerList(roleKey, inputEl) {
-    if (!inputEl.files.length || !db.activeCompany) return;
+    if (!inputEl.files.length || !selectedCompanyCode) return;
     const fd = new FormData();
     fd.append('file', inputEl.files[0]);
     try {
         const res = await fetch('/parse_partners', { method: 'POST', body: fd });
         const data = await res.json();
         if (data.error) { alert(data.error); return; }
-        db.companies[db.activeCompany][roleKey] = data.items || [];
-        saveDB();
+        sharedDB.companies[selectedCompanyCode][roleKey] = data.items || [];
+        updateStatusBadges();
+        await persistDBToServer();
         const label = roleKey === 'customers' ? 'Khách hàng' : 'Nhà cung cấp';
-        alert(`✅ Đã nạp và lưu ${data.items.length} ${label} cho "${db.activeCompany}"!`);
+        alert(`✅ Đã nạp & lưu ${data.items.length} ${label} cho [${selectedCompanyCode}] lên hệ thống Web!`);
     } catch (e) {
         alert('Lỗi khi đọc file danh sách: ' + e);
     } finally {
         inputEl.value = '';
     }
-}
-
-function exportBackup() {
-    const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'DanhBa_KhachHang_NCC_Backup.json';
-    a.click();
-    URL.revokeObjectURL(url);
-}
-
-function importBackup(inputEl) {
-    if (!inputEl.files.length) return;
-    const reader = new FileReader();
-    reader.onload = e => {
-        try {
-            const imported = JSON.parse(e.target.result);
-            if (imported && imported.companies) {
-                db.companies = { ...db.companies, ...imported.companies };
-                if (imported.activeCompany) db.activeCompany = imported.activeCompany;
-                saveDB();
-                alert('✅ Đã khôi phục danh bạ các công ty thành công!');
-            } else {
-                alert('File sao lưu không đúng định dạng!');
-            }
-        } catch (err) {
-            alert('Lỗi đọc file JSON: ' + err);
-        }
-    };
-    reader.readAsText(inputEl.files[0]);
-    inputEl.value = '';
 }
 
 function showFiles() {
@@ -1815,16 +1972,10 @@ async function uploadAndProcess() {
     const inp = document.getElementById('files');
     if (!inp.files.length) { alert('Vui lòng chọn ít nhất 1 file sao kê!'); return; }
 
-    const activeComp = db.companies[db.activeCompany] || { customers: [], suppliers: [], internalPeople: [] };
-    const rawInt = document.getElementById('internalPeopleInput').value;
-    if (rawInt.trim() && (!activeComp.internalPeople || !activeComp.internalPeople.length)) {
-        activeComp.internalPeople = rawInt.split(',').map(x => x.trim()).filter(Boolean);
-    }
-
     const formData = new FormData();
     for (let f of inp.files) formData.append('files', f);
     formData.append('password', document.getElementById('pwd').value);
-    formData.append('partners_json', JSON.stringify(activeComp));
+    formData.append('fallback_company_code', selectedCompanyCode);
 
     document.getElementById('loader').style.display = 'block';
     document.getElementById('resultBox').style.display = 'none';
@@ -1881,7 +2032,7 @@ function selectTab(idx) {
     document.getElementById('searchBox').value = '';
     const s = allSheetsData[idx];
     document.getElementById('sheetMeta').innerHTML =
-        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Chủ TK: <b>${s.customer || '—'}</b> • Giao dịch: <b>${s.rows.length}</b>`;
+        `Ngân hàng: <b>${s.bank}</b> • Số TK: <b>${s.account || '—'}</b> • Công ty: <b>${s.customer || s.company_code || '—'}</b> • Giao dịch: <b>${s.rows.length}</b>`;
     renderPreviewRows(s.rows);
 }
 
@@ -1986,7 +2137,7 @@ async function downloadExcel(mode) {
     }
 }
 
-loadDB();
+loadSharedDB();
 </script>
 </body>
 </html>"""
@@ -1995,6 +2146,18 @@ loadDB();
 @app.route("/")
 def index():
     return render_template_string(HTML_UI)
+
+
+@app.route("/api/partners", methods=["GET"])
+def api_get_partners():
+    return jsonify({"db": load_shared_db()})
+
+
+@app.route("/api/partners/save", methods=["POST"])
+def api_save_partners():
+    payload = request.get_json(silent=True) or {}
+    ok, msg = save_shared_db(payload)
+    return jsonify({"ok": ok, "message": msg})
 
 
 @app.route("/parse_partners", methods=["POST"])
@@ -2016,14 +2179,9 @@ def parse_partners_route():
 def process_files():
     uploaded = request.files.getlist("files")
     pwd = request.form.get("password", "").strip() or None
-    partners_raw = request.form.get("partners_json", "{}")
-    try:
-        partners_obj = json.loads(partners_raw)
-    except Exception:
-        partners_obj = {}
-    customers = partners_obj.get("customers", [])
-    suppliers = partners_obj.get("suppliers", [])
-    internal_people = partners_obj.get("internalPeople", [])
+    fallback_comp_code = request.form.get("fallback_company_code", "").strip()
+    shared_db = load_shared_db()
+    companies_map = shared_db.get("companies", {})
 
     if not uploaded:
         return jsonify({"error": "Không có file nào được tải lên"}), 400
@@ -2040,7 +2198,14 @@ def process_files():
             res = extract_any(p, password=pwd)
             warns = [] if res.get('loi') else validate(res)
             hi = res.get('header_info', {})
-            owner_name = hi.get('customer') or hi.get('account_name') or ''
+            acc_no = str(hi.get('account_no', '') or '').strip()
+
+            # Tu dong nhan dien Ma CT theo So tai khoan trong TaiKhoanNH
+            comp_code = _ACC_TO_COMPANY_CODE.get(acc_no, "") or fallback_comp_code
+            comp_obj = companies_map.get(comp_code, {})
+            owner_name = hi.get('customer') or hi.get('account_name') or comp_obj.get('name', '')
+            customers = comp_obj.get("customers", [])
+            suppliers = comp_obj.get("suppliers", [])
             bank_code = _resolve_bank_partner_code(res.get('bank'), res.get('source_file', ''))
 
             t_deb = to_num(res['total_debit']) if res.get('total_debit') else sum(to_num(x['No']) for x in res['rows'])
@@ -2053,7 +2218,7 @@ def process_files():
             summary.append({
                 "file": res['source_file'],
                 "bank": str(res['bank']).upper(),
-                "account": hi.get('account_no', ''),
+                "account": acc_no,
                 "count": len(res['rows']),
                 "debit": f"{t_deb:,.0f}",
                 "credit": f"{t_cred:,.0f}",
@@ -2065,8 +2230,8 @@ def process_files():
                 no_v = to_num(r['No'])
                 co_v = to_num(r['Co'])
                 tk_doi_ung, ma_dt = classify_for_asp(
-                    r, owner_name=owner_name, customers=customers, suppliers=suppliers,
-                    bank_code=bank_code, internal_people=internal_people
+                    r, owner_name=owner_name, owner_code=comp_code, owner_acc=acc_no,
+                    customers=customers, suppliers=suppliers, bank_code=bank_code
                 )
                 preview_rows.append({
                     "Ngay": r['Ngay'],
@@ -2080,8 +2245,9 @@ def process_files():
             sheets.append({
                 "file": res['source_file'],
                 "bank": str(res['bank']).upper(),
-                "account": hi.get('account_no', ''),
+                "account": acc_no,
                 "customer": owner_name,
+                "company_code": comp_code,
                 "error": res.get('loi'),
                 "rows": preview_rows
             })
